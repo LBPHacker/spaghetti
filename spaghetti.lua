@@ -1244,6 +1244,13 @@ local particle_macros = {
 			--          fi    p3
 		}
 	end,
+	[ "cload" ] = function(ctx, stack, to)
+		return {
+			--          fi dr p3
+			{ type = pt.DRAY, x = stack * 3, tmp = 1, tmp2 = to * 2 - 4 + stack * 3 },
+			--          fi    p3
+		}
+	end,
 	[ "tstore" ] = function(ctx, stack, from, to)
 		return {
 			--          p3 ld fi
@@ -1394,9 +1401,18 @@ local function lift_to_parts(level, constants, layers, computation_slots, storag
 			end
 			for mode = 11, 0, -1 do
 				if by_modes[mode] then
+					table.sort(by_modes[mode], function(lhs, rhs)
+						return lhs.load_from < rhs.load_from
+					end)
 					materialize_macro(parts_layer, "mode", ix_stack, mode)
+					local last_load_from
 					for _, item in ipairs(by_modes[mode]) do
-						materialize_macro(parts_layer, "load", ix_stack, item.load_from, item.index)
+						if item.load_from == last_load_from then
+							materialize_macro(parts_layer, "cload", ix_stack, item.index)
+						else
+							materialize_macro(parts_layer, "load", ix_stack, item.load_from, item.index)
+						end
+						last_load_from = item.load_from
 					end
 				end
 			end
