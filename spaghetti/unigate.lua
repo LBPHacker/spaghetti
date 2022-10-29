@@ -1,24 +1,10 @@
-#!/usr/bin/env luajit
-
-local env = getfenv(1)
-setfenv(1, setmetatable({}, {
-	__index = function(tbl, key)
-		if env[key] then
-			return env[key]
-		end
-		error("invalid __index", 2)
-	end,
-	__newindex = function(tbl, key, value)
-		error("invalid __newindex", 2)
-	end,
-}))
-
 local bit = _G.bit or require("bit32")
+local check = require("spaghetti.check")
 local report = print
 
 local LSNS_LIFE_3 = 0x10000003
 local STACK_LIMIT = 1500
-local spaghetti = {}
+local unigate = {}
 
 local function table_insert_all(dst, src)
 	for _, item in ipairs(src) do
@@ -55,27 +41,9 @@ local function make_multinode()
 	}, multinode_m)
 end
 
-local function check_integer(entity, level, integer)
-	level = level + 1
-	if type(integer) ~= "number" then
-		error(entity .. " is not a number", level)
-	end
-	if integer % 1 ~= 0 then
-		error(entity .. " is not an integer", level)
-	end
-end
-
-local function check_positive_integer(entity, level, integer)
-	level = level + 1
-	check_integer(entity, level, integer)
-	if integer <= 0 then
-		error(entity .. " is out of range", level)
-	end
-end
-
 local function check_index(entity, level, index, slots)
 	level = level + 1
-	check_positive_integer(entity, level, index)
+	check.positive_integer(entity, level, index)
 	if index > slots then
 		error(entity .. " is out of range", level)
 	end
@@ -83,7 +51,7 @@ end
 
 local function check_filt_ctype(entity, level, fctype)
 	level = level + 1
-	check_integer(entity, level, fctype)
+	check.integer(entity, level, fctype)
 	if fctype < 0 or fctype > 0x3FFFFFFF then
 		error(entity .. " is out of range", level)
 	end
@@ -102,16 +70,9 @@ local function check_payload(entity, level, payload, keepalive)
 	end
 end
 
-local function check_table(entity, level, thing)
-	level = level + 1
-	if type(thing) ~= "table" then
-		error(entity .. " is not a table", level)
-	end
-end
-
 local function check_node(entity, level, node)
 	level = level + 1
-	check_table(entity, level, node)
+	check.table(entity, level, node)
 	if getmetatable(node) ~= node_m then
 		error(entity .. " is not a node", level)
 	end
@@ -152,7 +113,7 @@ local function constant(level, keepalive, payload)
 	}, node_m)
 end
 
-function spaghetti.constant(...)
+function unigate.constant(...)
 	return constant(2, ...)
 end
 
@@ -205,7 +166,7 @@ do
 			}, node_m)
 		end
 		node_i[info.name] = func
-		spaghetti[info.name] = func
+		unigate[info.name] = func
 		if info.metamethod then
 			node_m[info.metamethod] = func
 		end
@@ -400,7 +361,7 @@ function node_m:__tostring()
 	return self.label_ and tostring(self.label_) or "(unlabelled)"
 end
 
-function spaghetti.input(keepalive, payload)
+function unigate.input(keepalive, payload)
 	local level = 2
 	check_keepalive("keepalive", level, keepalive)
 	check_payload("payload", level, payload, keepalive)
@@ -1496,21 +1457,21 @@ local function emit(parts, stacks, x, y)
 	report("done")
 end
 
-function spaghetti.synthesize(inputs, outputs, computation_slots, storage_slots, stacks, x, y, extra_parts)
+function unigate.synthesize(inputs, outputs, computation_slots, storage_slots, stacks, x, y, extra_parts)
 	x = x - 6
 	local level = 2
-	check_table("inputs", level, inputs)
+	check.table("inputs", level, inputs)
 	for index, node in pairs(inputs) do
 		check_index("input index " .. tostring(index), level, index, storage_slots)
 		check_input_node("input node at index " .. tostring(index), level, node)
 	end
-	check_table("outputs", level, outputs)
+	check.table("outputs", level, outputs)
 	for index, node in pairs(outputs) do
 		check_index("output index " .. tostring(index), level, index, storage_slots)
 		check_output_node("output node at index " .. tostring(index), level, node)
 	end
-	check_positive_integer("computation slots", level, computation_slots)
-	check_positive_integer("storage slots", level, storage_slots)
+	check.positive_integer("computation slots", level, computation_slots)
+	check.positive_integer("storage slots", level, storage_slots)
 	local inputs_reverse = {}
 	for index, node in pairs(inputs) do
 		if inputs_reverse[node] then
@@ -1535,16 +1496,16 @@ function spaghetti.synthesize(inputs, outputs, computation_slots, storage_slots,
 	emit(parts, stacks, x, y)
 end
 
-function spaghetti.shift(k)
+function unigate.shift(k)
 	return bit.lshift(1, k)
 end
 
-function spaghetti.lshiftk(a, b)
-	return spaghetti.lshift(a, spaghetti.shift(b))
+function unigate.lshiftk(a, b)
+	return unigate.lshift(a, unigate.shift(b))
 end
 
-function spaghetti.rshiftk(a, b)
-	return spaghetti.rshift(a, spaghetti.shift(b))
+function unigate.rshiftk(a, b)
+	return unigate.rshift(a, unigate.shift(b))
 end
 
-return spaghetti
+return unigate

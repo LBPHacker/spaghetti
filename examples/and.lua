@@ -1,5 +1,7 @@
 #!/usr/bin/env luajit
 
+-- warning: defunct, play with ks.lua instead
+
 local env = getfenv(1)
 setfenv(1, setmetatable({}, {
 	__index = function(tbl, key)
@@ -13,17 +15,17 @@ setfenv(1, setmetatable({}, {
 	end,
 }))
 
-local spaghetti = require("spaghetti")
+local unigate = require("spaghetti.unigate")
 
-local lhs = spaghetti.input(0x20000000, 0x0000FFFF)
+local lhs = unigate.input(0x20000000, 0x0000FFFF)
 lhs:label("lhs")
-local rhs = spaghetti.input(0x20000000, 0x0000FFFF)
+local rhs = unigate.input(0x20000000, 0x0000FFFF)
 rhs:label("rhs")
 local res = (lhs % rhs) % 0x200000FF
 res:label("res")
 res:assert(0x20000000, 0x000000FF)
 
-spaghetti.synthesize({
+unigate.synthesize({
 	[ 1 ] = lhs,
 	[ 3 ] = rhs,
 }, {

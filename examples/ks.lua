@@ -13,13 +13,13 @@ setfenv(1, setmetatable({}, {
 	end,
 }))
 
-local spaghetti = require("spaghetti")
-local shift = spaghetti.shift
-local band = spaghetti.band
-local bxor = spaghetti.bxor
-local bor = spaghetti.bor
-local lshiftk = spaghetti.lshiftk
-local constant = spaghetti.constant
+local unigate = require("spaghetti.unigate")
+local shift = unigate.shift
+local band = unigate.band
+local bxor = unigate.bxor
+local bor = unigate.bor
+local lshiftk = unigate.lshiftk
+local constant = unigate.constant
 
 local function ks(lhs, rhs)
 	lhs:assert(0x10000000, 0x0001FFFF)
@@ -48,12 +48,12 @@ local function ks(lhs, rhs)
 	return sum
 end
 
-local lhs = spaghetti.input(0x10000000, 0x0001FFFF)
-local rhs = spaghetti.input(0x10000000, 0x0000FFFF)
+local lhs = unigate.input(0x10000000, 0x0001FFFF)
+local rhs = unigate.input(0x10000000, 0x0000FFFF)
 local sum = ks(lhs, rhs)
 sum:assert(0x10000000, 0x0001FFFF)
 
-spaghetti.synthesize({
+unigate.synthesize({
 	[ 1 ] = lhs,
 	[ 3 ] = rhs,
 }, {

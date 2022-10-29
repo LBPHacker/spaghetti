@@ -1,5 +1,7 @@
 #!/usr/bin/env luajit
 
+-- warning: defunct, play with ks.lua instead
+
 local env = getfenv(1)
 setfenv(1, setmetatable({}, {
 	__index = function(tbl, key)
@@ -13,17 +15,17 @@ setfenv(1, setmetatable({}, {
 	end,
 }))
 
-local spaghetti = require("spaghetti")
-local shift = spaghetti.shift
-local band = spaghetti.band
-local bxor = spaghetti.bxor
-local bor = spaghetti.bor
-local lshiftk = spaghetti.lshiftk
-local constant = spaghetti.constant
+local unigate = require("spaghetti.unigate")
+local shift = unigate.shift
+local band = unigate.band
+local bxor = unigate.bxor
+local bor = unigate.bor
+local lshiftk = unigate.lshiftk
+local constant = unigate.constant
 
-local lhs = spaghetti.input(0x10000000, 0x0001FFFF) .. "lhs"
+local lhs = unigate.input(0x10000000, 0x0001FFFF) .. "lhs"
 local carry_in = lhs:band(0x00010000)
-local rhs = spaghetti.input(0x10000000, 0x0000FFFF) .. "rhs"
+local rhs = unigate.input(0x10000000, 0x0000FFFF) .. "rhs"
 local lhs_ka = lhs:bor(0x00010000)
 local rhs_ka = rhs:bor(0x3FFF0000)
 local generate = band(lhs_ka, rhs_ka) .. { "generate_0", 0x10010000, 0x0000FFFF }
@@ -43,7 +45,7 @@ local generate = band(lhs_ka, rhs_ka) .. { "generate_0", 0x10010000, 0x0000FFFF 
 -- local carries = bor(generate_shifted, propagate_conditional) .. { "carries", 0x3FFE0000, 0x0001FFFF }
 -- local sum = bxor(onebit_sums, carries) .. { "sum", 0x10000000, 0x0001FFFF }
 
-spaghetti.synthesize({
+unigate.synthesize({
 	[ 1 ] = lhs,
 	[ 3 ] = rhs,
 }, {
