@@ -119,8 +119,8 @@ end
 
 do
 	local function operator(info)
-		local function func(...)
-			local level = 2
+		local function func_inner(level, ...)
+			level = level + 1
 			if select("#", ...) ~= #info.operands then
 				error("invalid number of operands", level)
 			end
@@ -164,6 +164,25 @@ do
 				label_ = ("%s(%s)"):format(info.name, table.concat(operand_strs, ",")),
 				constant_foldable_ = constants_only,
 			}, node_m)
+		end
+
+		local function func(...)
+			local level = 2
+			if info.name == "ternary" then
+				local operands = { ... }
+				local ternary_group = {}
+				local results = {}
+				while operands[2] do
+					local result = func_inner(level, unpack(operands, 1, 3))
+					result.ternary_group_ = ternary_group
+					table.insert(results, result)
+					table.remove(operands, 3)
+					table.remove(operands, 2)
+				end
+				ternary_group.nodes = results
+				return unpack(results)
+			end
+			return func_inner(level, ...)
 		end
 		node_i[info.name] = func
 		unigate[info.name] = func
@@ -483,6 +502,7 @@ local function clone_hierarchy(inputs_reverse, outputs)
 			multinode.keepalive_ = node.keepalive_
 			multinode.payload_ = node.payload_
 			multinode.operator_ = node.operator_
+			multinode.ternary_group_ = node.ternary_group_
 			multinode:merge_nodes({ [node] = true })
 			multinodes[node] = multinode
 		end
@@ -601,18 +621,29 @@ local function fold_constants(hierarchy)
 			clone.input_index_ = multinode.input_index_
 			if multinode.type_ == "operator" and multinode.operator_.name == "ternary" then
 				-- XXX: not exactly constant folding...
+				local ternary_group = multinode.ternary_group_
 				local cond = clones[multinode.inputs[1]]
 				local cond1 = cond.inputs[1]
 				local cond2 = cond.inputs[2]
 				local vnz = clones[multinode.inputs[2]]
 				local vz = clones[multinode.inputs[3]]
-				hierarchy_untie(cond, cond1, 1)
-				hierarchy_untie(cond, cond2, 2)
+				if cond1 then
+					-- this is the first ternary in the group, redirect condition's inputs
+					hierarchy_untie(cond, cond1, 1)
+					hierarchy_untie(cond, cond2, 2)
+					ternary_group.cond1 = cond1
+					ternary_group.cond2 = cond2
+				else
+					-- this is not the first ternary in the group, get redirected inputs
+					cond1 = ternary_group.cond1
+					cond2 = ternary_group.cond2
+				end
 				hierarchy_tie(clone, cond1, 1)
 				hierarchy_tie(clone, cond2, 2)
 				hierarchy_tie(clone, vnz, 3)
 				hierarchy_tie(clone, vz, 4)
 				clone.ternary_operator = multinode.inputs[1].operator_
+				clone.ternary_group_ = ternary_group
 			else
 				for ix_input, input in ipairs(multinode.inputs) do
 					local source = clones[input]
@@ -669,6 +700,7 @@ local function unify_equivalent_siblings(hierarchy)
 			new_canonical.operator_ = multinode.operator_
 			new_canonical.input_index_ = multinode.input_index_
 			new_canonical.ternary_operator = multinode.ternary_operator
+			new_canonical.ternary_group_ = multinode.ternary_group_
 			for ix_input, input in ipairs(multinode.inputs) do
 				local source = clones[input]
 				hierarchy_tie(new_canonical, source, ix_input)
@@ -730,20 +762,58 @@ local queue_m = { type = "queue", __index = queue_i }
 function queue_i:push(item)
 	self.items_[self.head_] = item
 	self.head_ = self.head_ + 1
+	self.used_ = self.used_ + 1
+end
+
+function queue_i:auto_skip_()
+	while not self.items_[self.tail_] do
+		self.tail_ = self.tail_ + 1
+	end
 end
 
 function queue_i:get()
+	self:auto_skip_()
 	return self.items_[self.tail_]
 end
 
 function queue_i:pop()
 	assert(not self:empty())
+	self:auto_skip_()
 	self.items_[self.tail_] = nil
 	self.tail_ = self.tail_ + 1
+	self.used_ = self.used_ - 1
+end
+
+function queue_i:oo_get(cursor)
+	assert(self.items_[cursor])
+	return self.items_[cursor]
+end
+
+function queue_i:oo_pop(cursor)
+	assert(self.items_[cursor])
+	self.items_[cursor] = nil
+	self.used_ = self.used_ - 1
 end
 
 function queue_i:empty()
-	return self.head_ == self.tail_
+	return self.used_ == 0
+end
+
+function queue_i:inspect()
+	local seen = 0
+	local cursor = self.tail_
+	return function()
+		if seen == self.used_ then
+			return
+		end
+		while not self.items_[cursor] do
+			cursor = cursor + 1
+		end
+		local item_cursor, item = cursor, self.items_[cursor]
+		cursor = cursor + 1
+		seen = seen + 1
+		return item_cursor, item
+	end
 end
 
 function queue_i:requeue(other)
@@ -757,6 +827,7 @@ local function make_queue()
 	return setmetatable({
 		head_ = 1,
 		tail_ = 1,
+		used_ = 0,
 		items_ = {},
 	}, queue_m)
 end
@@ -806,13 +877,38 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 		multinode.dependency_count = #multinode.inputs
 	end
 	local nodes_ready = make_queue() -- other than ternaries
-	local ternaries_ready = make_queue()
+	local ternary_groups_ready = make_queue()
 	local nodes_ready_next = make_queue()
-	local ternaries_ready_next = make_queue()
+	local ternary_groups_ready_next = make_queue()
+
+	local function cslots_needed_for_ternary()
+		local lowest = math.huge
+		local index
+		for ix_ternary_group, ternary_group in ternary_groups_ready:inspect() do
+			local cslots_needed = 2 + #ternary_group.multinodes * 2
+			if lowest > cslots_needed then
+				lowest = cslots_needed
+				index = ix_ternary_group
+			end
+		end
+		return lowest, index
+	end
 
 	local constants = {}
 	local layers = {}
 	local storage = make_storage(storage_slots)
+
+	for multinode in ts_hierarchy_down_iter(hierarchy) do
+		local ternary_group = multinode.ternary_group_
+		if ternary_group then
+			if not ternary_group.multinodes then
+				ternary_group.multinodes = {}
+				ternary_group.multinodes_pending = 0
+			end
+			table.insert(ternary_group.multinodes, multinode)
+			ternary_group.multinodes_pending = ternary_group.multinodes_pending + 1
+		end
+	end
 
 	local mark_processed
 	do
@@ -856,7 +952,11 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 			end)
 			for _, multinode in ipairs(enabled) do
 				if multinode.type_ == "operator" and multinode.operator_.name == "ternary" then
-					ternaries_ready_next:push(multinode)
+					local ternary_group = multinode.ternary_group_
+					ternary_group.multinodes_pending = ternary_group.multinodes_pending - 1
+					if ternary_group.multinodes_pending == 0 then
+						ternary_groups_ready_next:push(ternary_group)
+					end
 				else
 					nodes_ready_next:push(multinode)
 				end
@@ -998,7 +1098,7 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 		end
 	end
 
-	while not nodes_ready:empty() or not ternaries_ready:empty() do
+	while not nodes_ready:empty() or not ternary_groups_ready:empty() do
 		local layer_filled = false
 		local emitted_something = false
 		while not nodes_ready:empty() and not layer_filled do
@@ -1029,8 +1129,8 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 						assert(#candidate.inputs == 2)
 						cslots_needed = 2
 					end
-					if not ternaries_ready:empty() then
-						cslots_needed = cslots_needed + 4
+					if not ternary_groups_ready:empty() then
+						cslots_needed = cslots_needed + cslots_needed_for_ternary()
 					end
 					local last_layer = open_layer()
 					if cslots_needed > cslots_left then
@@ -1074,40 +1174,53 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 		if chaining_output then
 			chain_to_storage(level)
 		end
-		if not ternaries_ready:empty() then
-			local ternary = ternaries_ready:get()
+		if not ternary_groups_ready:empty() then
 			local last_layer = open_layer()
-			if cslots_left >= 4 then
+			local cslots_needed, ix_ternary_group = cslots_needed_for_ternary()
+			local ternary_group = ternary_groups_ready:oo_get(ix_ternary_group)
+			if cslots_left >= cslots_needed then
+				local multiplicity = #ternary_group.multinodes
+				for _, ternary in ipairs(ternary_group.multinodes) do
+					table.insert(last_layer, {
+						load_from = ternary.inputs[4].storage_slot,
+						filt_tmp = 0,
+					})
+					cslots_left = cslots_left - 1
+					decrease_use_count(ternary.inputs[4])
+					to_storage(level, ternary)
+					last_layer[#last_layer].tentative_store_to = ternary.storage_slot
+					last_layer[#last_layer].store_to = nil
+				end
+				local first_ternary = ternary_group.multinodes[1]
 				table.insert(last_layer, {
-					load_from = ternary.inputs[4].storage_slot,
+					load_from = first_ternary.inputs[1].storage_slot,
 					filt_tmp = 0,
 				})
 				cslots_left = cslots_left - 1
-				decrease_use_count(ternary.inputs[4])
-				to_storage(level, ternary)
-				last_layer[#last_layer].tentative_store_to = ternary.storage_slot
-				last_layer[#last_layer].store_to = nil
+				for _ = 1, multiplicity do
+					decrease_use_count(first_ternary.inputs[1])
+				end
 				table.insert(last_layer, {
-					load_from = ternary.inputs[1].storage_slot,
-					filt_tmp = 0,
+					load_from = first_ternary.inputs[2].storage_slot,
+					filt_tmp = first_ternary.ternary_operator.filt_tmp,
 				})
-				decrease_use_count(ternary.inputs[1])
-				table.insert(last_layer, {
-					load_from = ternary.inputs[2].storage_slot,
-					filt_tmp = ternary.ternary_operator.filt_tmp,
-				})
-				decrease_use_count(ternary.inputs[2])
-				table.insert(last_layer, {
-					load_from = ternary.inputs[3].storage_slot,
-					filt_tmp = 0,
-					store_to = ternary.storage_slot,
-				})
-				decrease_use_count(ternary.inputs[3])
-				last_layer[#last_layer].store_to = ternary.storage_slot
-				cslots_left = cslots_left - 3
-				produce_output(level, ternary)
+				cslots_left = cslots_left - 1
+				for _ = 1, multiplicity do
+					decrease_use_count(first_ternary.inputs[2])
+				end
+				for _, ternary in ipairs(ternary_group.multinodes) do
+					table.insert(last_layer, {
+						load_from = ternary.inputs[3].storage_slot,
+						filt_tmp = 0,
+						store_to = ternary.storage_slot,
+					})
+					decrease_use_count(ternary.inputs[3])
+					cslots_left = cslots_left - 1
+					last_layer[#last_layer].store_to = ternary.storage_slot
+					produce_output(level, ternary)
+				end
 				emitted_something = true
-				ternaries_ready:pop()
+				ternary_groups_ready:oo_pop(ix_ternary_group)
 			end
 		end
 		if not emitted_something then
@@ -1115,7 +1228,7 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 		end
 		close_layer()
 		nodes_ready:requeue(nodes_ready_next)
-		ternaries_ready:requeue(ternaries_ready_next)
+		ternary_groups_ready:requeue(ternary_groups_ready_next)
 	end
 	table.sort(remapped_outputs, function(lhs, rhs)
 		return lhs.to < rhs.to
@@ -1288,6 +1401,11 @@ local particle_macros = {
 local function lift_to_parts(level, constants, layers, computation_slots, storage_slots, stacks, x, y, extra_parts)
 	level = level + 1
 
+	local store_tentative_score = {
+		[ "tstore" ] = 1,
+		[ "store"  ] = 2,
+	}
+
 	local right_13
 	for _, constant in ipairs(constants) do
 		if constant.value == LSNS_LIFE_3 then
@@ -1379,13 +1497,34 @@ local function lift_to_parts(level, constants, layers, computation_slots, storag
 			end
 			materialize_macro(parts_layer, "aray", ix_stack)
 			materialize_macro(parts_layer, "east", ix_stack)
-			for index, item in ipairs(layers[ix_layer]) do
+			local stores = {}
+			for _, item in ipairs(layers[ix_layer]) do
 				if item.store_to then
-					materialize_macro(parts_layer, "store", ix_stack, item.index, item.store_to)
+					table.insert(stores, {
+						macro = "store",
+						stack = ix_stack,
+						from = item.index,
+						to = item.store_to,
+					})
 				end
 				if item.tentative_store_to then
-					materialize_macro(parts_layer, "tstore", ix_stack, item.index, item.tentative_store_to)
+					table.insert(stores, {
+						macro = "tstore",
+						stack = ix_stack,
+						from = item.index,
+						to = item.tentative_store_to,
+					})
 				end
+			end
+			table.sort(stores, function(lhs, rhs)
+				if lhs.to ~= rhs.to then return lhs.to < rhs.to end
+				lhs_t_score = store_tentative_score[lhs.macro]
+				rhs_t_score = store_tentative_score[rhs.macro]
+				if lhs_t_score ~= rhs_t_score then return lhs_t_score < rhs_t_score end
+				return false
+			end)
+			for _, store in ipairs(stores) do
+				materialize_macro(parts_layer, store.macro, store.stack, store.from, store.to)
 			end
 			materialize_macro(parts_layer, "west", ix_stack)
 			materialize_macro(parts_layer, "clear", ix_stack)
