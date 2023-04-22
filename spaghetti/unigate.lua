@@ -33,6 +33,14 @@ function multinode_m:__tostring()
 	return table.concat(node_strs, "|")
 end
 
+function multinode_i:id()
+	local mt = getmetatable(self)
+	setmetatable(self, nil)
+	local str = tostring(self)
+	setmetatable(self, mt)
+	return str
+end
+
 local function make_multinode()
 	return setmetatable({
 		nodes = {},
@@ -84,17 +92,15 @@ local function check_input_node(entity, level, node)
 	if node.type_ ~= "input" then
 		error(entity .. " is not an input node", level)
 	end
-	if node.keepalive_ == 0 then
-		error(entity .. " with zero keepalive", level)
-	end
 end
 
 local function check_output_node(entity, level, node)
 	level = level + 1
 	check_node(entity, level, node)
-	if node.keepalive_ == 0 then
-		error(entity .. " with zero keepalive", level)
-	end
+end
+
+local function get_default_label(level)
+	return "@[" .. (select(2, pcall(error, "@", level + 2)):match("^([^:]+:[^:]+): @$") or "???") .. "]"
 end
 
 local function constant(level, keepalive, payload)
@@ -110,11 +116,13 @@ local function constant(level, keepalive, payload)
 		payload_ = payload,
 		label_ = payload == 0 and ("#%X"):format(keepalive) or ("#%X/%X"):format(keepalive, payload),
 		constant_foldable_ = true,
+		default_label_ = get_default_label(level),
 	}, node_m)
 end
 
 function unigate.constant(...)
-	return constant(2, ...)
+	local level = 2
+	return constant(level - 1, ...) -- level adjusted due to tail call
 end
 
 do
@@ -138,16 +146,10 @@ do
 					if operand.type_ ~= "operator" or #operand.operator_.operands ~= 2 then
 						error("condition not provided by a binary operator", level)
 					end
-					if operand.keepalive_ ~= 0 then
-						error("operand #" .. ix_operand .. " with nonzero keepalive", level)
-					end
 				else
 					local keepalive = operand.keepalive_
 					if operand.constant_foldable_ then
 						keepalive = bit.bor(keepalive, operand.payload_)
-					end
-					if keepalive == 0 then
-						error("operand #" .. ix_operand .. " with zero keepalive", level)
 					end
 				end
 				if not operand.constant_foldable_ then
@@ -163,6 +165,7 @@ do
 				payload_ = payload,
 				label_ = ("%s(%s)"):format(info.name, table.concat(operand_strs, ",")),
 				constant_foldable_ = constants_only,
+				default_label_ = get_default_label(level),
 			}, node_m)
 		end
 
@@ -182,7 +185,7 @@ do
 				ternary_group.nodes = results
 				return unpack(results)
 			end
-			return func_inner(level, ...)
+			return func_inner(level - 1, ...) -- level adjusted due to tail call
 		end
 		node_i[info.name] = func
 		unigate[info.name] = func
@@ -299,7 +302,7 @@ do
 	operator({
 		name = "bxor",
 		operands = { "lhs", "rhs" },
-		metamethod = "__xor",
+		metamethod = "__pow",
 		commutative = true,
 		filt_tmp = 7,
 		apply = function(lhs, rhs)
@@ -355,29 +358,32 @@ function node_i:assert_(level, keepalive, payload)
 end
 
 function node_i:assert(...)
-	return self:assert_(2, ...)
+	local level = 2
+	return self:assert_(level - 1, ...) -- level adjusted due to tail call
 end
 
 function node_i:label(label)
 	local level = 2
+	local effective_label = label
 	if type(label) == "table" then
 		local offset = 1
 		local tbl = label
+		effective_label = nil
 		if type(tbl[1]) == "string" then
-			label = tbl[1]
+			effective_label = tbl[1]
 			offset = 2
 		end
 		if tbl[offset] then
 			self:assert_(level, tbl[offset], tbl[offset + 1])
 		end
 	end
-	self.label_ = label
+	self.label_ = effective_label
 	return self
 end
 node_m.__concat = node_i.label
 
 function node_m:__tostring()
-	return self.label_ and tostring(self.label_) or "(unlabelled)"
+	return self.label_ and tostring(self.label_) or self.default_label_
 end
 
 function unigate.input(keepalive, payload)
@@ -388,6 +394,7 @@ function unigate.input(keepalive, payload)
 		type_ = "input",
 		keepalive_ = keepalive,
 		payload_ = payload,
+		default_label_ = get_default_label(level),
 	}, node_m)
 end
 
@@ -430,7 +437,7 @@ local function ts(to_visit, visit, in_edge_count)
 	local in_edge_counts = {}
 	for _, node in ipairs(to_visit) do
 		in_edge_counts[node] = in_edge_count(node)
-		assert(in_edge_counts[node] == 0, "in edge count of initial node is nonzero")
+		assert(in_edge_counts[node] == 0, "in edge count of initial node is non-zero")
 	end
 	bfs(to_visit, function(node)
 		local to_visit = {}
@@ -579,7 +586,8 @@ local function hierarchy_tie(destination, source, operand)
 	})
 end
 
-local function hierarchy_untie(destination, source, operand)
+local function hierarchy_untie(destination, operand)
+	local source = destination.inputs[operand]
 	destination.inputs[operand] = nil
 	for index, output in ipairs(source.outputs) do
 		if output.multinode == destination then
@@ -589,7 +597,8 @@ local function hierarchy_untie(destination, source, operand)
 	end
 end
 
-local function fold_constants(hierarchy)
+local function do_folding(level, hierarchy)
+	level = level + 1
 	local new_hierarchy = {
 		terminals = {},
 		outputs = {},
@@ -623,25 +632,73 @@ local function fold_constants(hierarchy)
 				-- XXX: not exactly constant folding...
 				local ternary_group = multinode.ternary_group_
 				local cond = clones[multinode.inputs[1]]
-				local cond1 = cond.inputs[1]
-				local cond2 = cond.inputs[2]
 				local vnz = clones[multinode.inputs[2]]
 				local vz = clones[multinode.inputs[3]]
-				if cond1 then
+				if cond.inputs[1] then
 					-- this is the first ternary in the group, redirect condition's inputs
-					hierarchy_untie(cond, cond1, 1)
-					hierarchy_untie(cond, cond2, 2)
-					ternary_group.cond1 = cond1
-					ternary_group.cond2 = cond2
+					local function valid_cond(nnode)
+						if nnode.type_ ~= "operator" then
+							return false
+						end
+						if nnode.operator_.name == "ternary" then
+							return false
+						end
+						return nnode.keepalive_ == 0
+					end
+					if not valid_cond(cond) then
+						error("ternary condition " .. tostring(cond) .. " with non-zero keepalive", level)
+					end
+					local flat_cond = {}
+					local curr = cond
+					while true do
+						local valid_pred, valid_pred_index
+						local function record_valid(level, pnode, index)
+							level = level + 1
+							local nnode = pnode.inputs[index]
+							if not valid_cond(nnode) then
+								return
+							end
+							if valid_pred then
+								error("indirect ternary condition " .. tostring(pnode) .. " with multiple zero keepalive inputs", level)
+							end
+							valid_pred = nnode
+							valid_pred_index = index
+						end
+						assert(#curr.inputs == 2)
+						record_valid(level, curr, 1)
+						if curr.operator_.commutative then
+							record_valid(level, curr, 2)
+						end
+						assert(curr.operator_.filt_tmp)
+						local function ternary_group_tie(filt_tmp, input)
+							table.insert(flat_cond, {
+								fold_input = input,
+								filt_tmp = filt_tmp,
+							})
+							hierarchy_tie(clone, input, #flat_cond)
+						end
+						if valid_pred then
+							ternary_group_tie(curr.operator_.filt_tmp, curr.inputs[3 - valid_pred_index])
+						else
+							ternary_group_tie(curr.operator_.filt_tmp, curr.inputs[2])
+							ternary_group_tie(0, curr.inputs[1])
+						end
+						hierarchy_untie(curr, 1)
+						hierarchy_untie(curr, 2)
+						if not valid_pred then
+							break
+						end
+						curr = valid_pred
+					end
+					ternary_group.flat_cond = flat_cond
 				else
 					-- this is not the first ternary in the group, get redirected inputs
-					cond1 = ternary_group.cond1
-					cond2 = ternary_group.cond2
+					for ix_input, entry in ipairs(ternary_group.flat_cond) do
+						hierarchy_tie(clone, entry.fold_input, ix_input)
+					end
 				end
-				hierarchy_tie(clone, cond1, 1)
-				hierarchy_tie(clone, cond2, 2)
-				hierarchy_tie(clone, vnz, 3)
-				hierarchy_tie(clone, vz, 4)
+				hierarchy_tie(clone, vnz, #ternary_group.flat_cond + 1)
+				hierarchy_tie(clone, vz, #ternary_group.flat_cond + 2)
 				clone.ternary_operator = multinode.inputs[1].operator_
 				clone.ternary_group_ = ternary_group
 			else
@@ -663,6 +720,17 @@ local function fold_constants(hierarchy)
 		end
 	end
 	return new_hierarchy
+end
+
+local function check_nonzero(level, hierarchy)
+	level = level + 1
+	for multinode in ts_hierarchy_down_iter(hierarchy) do
+		if not (multinode.type_ == "input" or multinode.type_ == "constant") then
+			if multinode.keepalive_ == 0 then
+				error("multinode " .. tostring(multinode) .. " with zero keepalive", level)
+			end
+		end
+	end
 end
 
 local function unify_equivalent_siblings(hierarchy)
@@ -885,7 +953,7 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 		local lowest = math.huge
 		local index
 		for ix_ternary_group, ternary_group in ternary_groups_ready:inspect() do
-			local cslots_needed = 2 + #ternary_group.multinodes * 2
+			local cslots_needed = #ternary_group.flat_cond + #ternary_group.multinodes * 2
 			if lowest > cslots_needed then
 				lowest = cslots_needed
 				index = ix_ternary_group
@@ -1134,7 +1202,9 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 					end
 					local last_layer = open_layer()
 					if cslots_needed > cslots_left then
-						chain_to_storage(level)
+						if chaining_output then
+							chain_to_storage(level)
+						end
 						layer_filled = true
 						break -- syntactically out of the candidate loop, but logically out of the ready node loop
 					end
@@ -1180,41 +1250,38 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 			local ternary_group = ternary_groups_ready:oo_get(ix_ternary_group)
 			if cslots_left >= cslots_needed then
 				local multiplicity = #ternary_group.multinodes
+				local vnz_index = #ternary_group.flat_cond + 1
+				local vz_index = #ternary_group.flat_cond + 2
+				local first_ternary = ternary_group.multinodes[1]
 				for _, ternary in ipairs(ternary_group.multinodes) do
 					table.insert(last_layer, {
-						load_from = ternary.inputs[4].storage_slot,
+						load_from = ternary.inputs[vz_index].storage_slot,
 						filt_tmp = 0,
 					})
 					cslots_left = cslots_left - 1
-					decrease_use_count(ternary.inputs[4])
+					decrease_use_count(ternary.inputs[vz_index])
 					to_storage(level, ternary)
 					last_layer[#last_layer].tentative_store_to = ternary.storage_slot
 					last_layer[#last_layer].store_to = nil
 				end
-				local first_ternary = ternary_group.multinodes[1]
-				table.insert(last_layer, {
-					load_from = first_ternary.inputs[1].storage_slot,
-					filt_tmp = 0,
-				})
-				cslots_left = cslots_left - 1
-				for _ = 1, multiplicity do
-					decrease_use_count(first_ternary.inputs[1])
-				end
-				table.insert(last_layer, {
-					load_from = first_ternary.inputs[2].storage_slot,
-					filt_tmp = first_ternary.ternary_operator.filt_tmp,
-				})
-				cslots_left = cslots_left - 1
-				for _ = 1, multiplicity do
-					decrease_use_count(first_ternary.inputs[2])
+				for ix_input = #ternary_group.flat_cond, 1, -1 do
+					local input = first_ternary.inputs[ix_input]
+					table.insert(last_layer, {
+						load_from = input.storage_slot,
+						filt_tmp = ternary_group.flat_cond[ix_input].filt_tmp,
+					})
+					cslots_left = cslots_left - 1
+					for _ = 1, multiplicity do
+						decrease_use_count(input)
+					end
 				end
 				for _, ternary in ipairs(ternary_group.multinodes) do
 					table.insert(last_layer, {
-						load_from = ternary.inputs[3].storage_slot,
+						load_from = ternary.inputs[vnz_index].storage_slot,
 						filt_tmp = 0,
 						store_to = ternary.storage_slot,
 					})
-					decrease_use_count(ternary.inputs[3])
+					decrease_use_count(ternary.inputs[vnz_index])
 					cslots_left = cslots_left - 1
 					last_layer[#last_layer].store_to = ternary.storage_slot
 					produce_output(level, ternary)
@@ -1571,7 +1638,7 @@ local function emit(parts, stacks, x, y)
 	end)
 	local ids = {}
 	for _ in ipairs(parts) do
-		local id = sim.partCreate(-3, 0, 0, pt.DMND)
+		local id = sim.partCreate(-3, 4, 4, pt.DMND)
 		if id == -1 then
 			for _, kid in ipairs(ids) do
 				sim.partKill(kid)
@@ -1627,7 +1694,8 @@ function unigate.synthesize(inputs, outputs, computation_slots, storage_slots, s
 	end
 	check_inputs_reachable(level, inputs_reverse, outputs)
 	local hierarchy = clone_hierarchy(inputs_reverse, outputs)
-	hierarchy = fold_constants(hierarchy)
+	hierarchy = do_folding(level, hierarchy)
+	check_nonzero(level, hierarchy)
 	hierarchy = unify_equivalent_siblings(hierarchy)
 	local constants, layers = layer_markup(level, inputs_reverse, outputs, outputs_reverse, hierarchy, computation_slots, storage_slots)
 	local parts = lift_to_parts(level, constants, layers, computation_slots, storage_slots, stacks, x, y, extra_parts)
