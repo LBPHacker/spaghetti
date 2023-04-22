@@ -100,7 +100,7 @@ local function check_output_node(entity, level, node)
 end
 
 local function get_default_label(level)
-	return "@[" .. (select(2, pcall(error, "@", level + 2)):match("^([^:]+:[^:]+): @$") or "???") .. "]"
+	return "[@" .. (select(2, pcall(error, "@", level + 2)):match("^([^:]+:[^:]+): @$") or "???") .. "]"
 end
 
 local function constant(level, keepalive, payload)
@@ -133,14 +133,14 @@ do
 				error("invalid number of operands", level)
 			end
 			local operands = { ... }
-			local operand_strs = {}
+			-- local operand_strs = {}
 			local constants_only = true
 			for ix_operand = 1, #operands do
 				if type(operands[ix_operand]) == "number" then
 					operands[ix_operand] = constant(level, operands[ix_operand])
 				end
 				check_node("operand #" .. ix_operand, level, operands[ix_operand])
-				operand_strs[ix_operand] = tostring(operands[ix_operand])
+				-- operand_strs[ix_operand] = tostring(operands[ix_operand])
 				local operand = operands[ix_operand]
 				if info.name == "ternary" and info.operands[ix_operand] == "cond" then
 					if operand.type_ ~= "operator" or #operand.operator_.operands ~= 2 then
@@ -163,7 +163,7 @@ do
 				operands_ = operands,
 				keepalive_ = keepalive,
 				payload_ = payload,
-				label_ = ("%s(%s)"):format(info.name, table.concat(operand_strs, ",")),
+				-- label_ = ("%s(%s)"):format(info.name, table.concat(operand_strs, ",")),
 				constant_foldable_ = constants_only,
 				default_label_ = get_default_label(level),
 			}, node_m)
@@ -353,7 +353,7 @@ function node_i:assert_(level, keepalive, payload)
 		error(("keepalive expected to be 0x%08X, is actually 0x%08X"):format(keepalive, self.keepalive_), level)
 	end
 	if payload ~= self.payload_ then
-		error(("keepalive expected to be 0x%08X, is actually 0x%08X"):format(payload, self.payload_), level)
+		error(("payload expected to be 0x%08X, is actually 0x%08X"):format(payload, self.payload_), level)
 	end
 end
 
@@ -484,11 +484,15 @@ local function check_inputs_reachable(level, inputs_reverse, outputs)
 	for _, node in pairs(outputs) do
 		table.insert(initial, node)
 	end
+	local seen_input = {}
 	bfs(initial, function(node)
 		local level = level + 2
 		local to_visit = {}
-		if node.type_ == "input" and not inputs_reverse[node] then -- XXX: node classes?
-			error("reached unlisted input node " .. tostring(node), level)
+		if node.type_ == "input" then
+			if not inputs_reverse[node] then -- XXX: node classes?
+				error("reached unlisted input node " .. tostring(node), level)
+			end
+			seen_input[node] = true
 		end
 		if node.type_ == "operator" then -- XXX: node classes?
 			for index, operand in ipairs(node.operands_) do
@@ -497,6 +501,11 @@ local function check_inputs_reachable(level, inputs_reverse, outputs)
 		end
 		return to_visit
 	end)
+	for node in pairs(inputs_reverse) do
+		if not seen_input[node] then
+			error("did not reach listed input node " .. tostring(node), level)
+		end
+	end
 end
 
 local function clone_hierarchy(inputs_reverse, outputs)
@@ -565,7 +574,13 @@ end
 local ts_hierarchy_down_iter = iterify(ts_hierarchy_down)
 
 local function ts_hierarchy_up(hierarchy, visit)
-	ts(hierarchy.outputs, function(multinode, dedges)
+	local initial = {}
+	for _, multinode in ipairs(hierarchy.outputs) do
+		if #multinode.outputs == 0 then
+			table.insert(initial, multinode)
+		end
+	end
+	ts(initial, function(multinode, dedges)
 		local to_visit = {}
 		visit(multinode, dedges)
 		for _, source in ipairs(multinode.inputs) do
@@ -649,6 +664,7 @@ local function do_folding(level, hierarchy)
 						error("ternary condition " .. tostring(cond) .. " with non-zero keepalive", level)
 					end
 					local flat_cond = {}
+					local flat_cond_tmps = {}
 					local curr = cond
 					while true do
 						local valid_pred, valid_pred_index
@@ -675,6 +691,7 @@ local function do_folding(level, hierarchy)
 								fold_input = input,
 								filt_tmp = filt_tmp,
 							})
+							table.insert(flat_cond_tmps, filt_tmp)
 							hierarchy_tie(clone, input, #flat_cond)
 						end
 						if valid_pred then
@@ -691,6 +708,7 @@ local function do_folding(level, hierarchy)
 						curr = valid_pred
 					end
 					ternary_group.flat_cond = flat_cond
+					ternary_group.ternary_operator = table.concat(flat_cond_tmps)
 				else
 					-- this is not the first ternary in the group, get redirected inputs
 					for ix_input, entry in ipairs(ternary_group.flat_cond) do
@@ -699,7 +717,7 @@ local function do_folding(level, hierarchy)
 				end
 				hierarchy_tie(clone, vnz, #ternary_group.flat_cond + 1)
 				hierarchy_tie(clone, vz, #ternary_group.flat_cond + 2)
-				clone.ternary_operator = multinode.inputs[1].operator_
+				clone.ternary_operator = ternary_group.ternary_operator
 				clone.ternary_group_ = ternary_group
 			else
 				for ix_input, input in ipairs(multinode.inputs) do
@@ -750,7 +768,7 @@ local function unify_equivalent_siblings(hierarchy)
 		if multinode.type_ == "operator" then -- XXX: node classes?
 			key = ("operator %s"):format(multinode.operator_.name)
 			if multinode.operator_.name == "ternary" then
-				key = key .. (" %s"):format(multinode.ternary_operator.name)
+				key = key .. (" %s"):format(multinode.ternary_operator)
 			end
 			for _, input in ipairs(multinode.inputs) do
 				key = key .. (" %i"):format(canonical_ids:get(clones[input]))
@@ -967,6 +985,7 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 	local storage = make_storage(storage_slots)
 
 	for multinode in ts_hierarchy_down_iter(hierarchy) do
+		multinode.use_count = 0
 		local ternary_group = multinode.ternary_group_
 		if ternary_group then
 			if not ternary_group.multinodes then
@@ -985,6 +1004,7 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 			node_ids:get(multinode)
 			nodes_ready:push(multinode)
 			multinode.layer = 0
+			multinode.enabled = true
 		end
 
 		function mark_processed(multinode)
@@ -1004,8 +1024,8 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 					local rhso = rhs.operator_.name
 					if lhso ~= rhso then return lhso < rhso end
 					if lhs.operator_.name == "ternary" then
-						local lhsto = lhs.ternary_operator.name
-						local rhsto = rhs.ternary_operator.name
+						local lhsto = lhs.ternary_operator
+						local rhsto = rhs.ternary_operator
 						if lhsto ~= trhso then return lhsto < rhsto end
 					end
 				end
@@ -1018,29 +1038,20 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 				end
 				return false
 			end)
-			for _, multinode in ipairs(enabled) do
-				if multinode.type_ == "operator" and multinode.operator_.name == "ternary" then
-					local ternary_group = multinode.ternary_group_
+			for _, emnode in ipairs(enabled) do
+				emnode.enabled = true
+				if emnode.type_ == "operator" and emnode.operator_.name == "ternary" then
+					local ternary_group = emnode.ternary_group_
 					ternary_group.multinodes_pending = ternary_group.multinodes_pending - 1
 					if ternary_group.multinodes_pending == 0 then
 						ternary_groups_ready_next:push(ternary_group)
 					end
 				else
-					nodes_ready_next:push(multinode)
+					nodes_ready_next:push(emnode)
 				end
-				node_ids:get(multinode)
+				node_ids:get(emnode)
 			end
 		end
-	end
-
-	local function derive_use_count(multinode)
-		local use_count = #multinode.outputs
-		for node in pairs(multinode.nodes) do
-			if outputs_reverse[node] then
-				use_count = use_count + #outputs_reverse[node]
-			end
-		end
-		return use_count
 	end
 
 	local remapped_outputs = {}
@@ -1093,17 +1104,22 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 				last_layer[#last_layer].store_to = multinode.storage_slot
 			end
 			remap_outputs(multinode)
+			multinode.use_count = 1
+		else
+			assert(multinode.use_count > 0)
+			multinode.use_count = multinode.use_count + 1
 		end
 	end
 
 	local chaining_output
 	local function chain_to_storage(level)
 		level = level + 1
-		to_storage(level, chaining_output.multinode)
+		to_storage(level, chaining_output.multinode.inputs[chaining_output.operand])
 		chaining_output = nil
 	end
 
 	local function decrease_use_count(multinode)
+		assert(multinode.use_count > 0)
 		multinode.use_count = multinode.use_count - 1
 		if multinode.use_count == 0 then
 			storage:free(multinode.storage_slot)
@@ -1113,38 +1129,36 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 
 	local function produce_output(level, multinode)
 		level = level + 1
-		multinode.use_count = derive_use_count(multinode)
 		multinode.layer = #layers
 		for node in pairs(multinode.nodes) do
 			if outputs_reverse[node] then
 				to_storage(level, multinode)
 			end
 		end
-		if multinode.operator_.name ~= "ternary" then
-			for index, output in ipairs(multinode.outputs) do
-				local destination = output.multinode
-				local max_other_layers = 0
-				for _, input in ipairs(destination.inputs) do
-					if input ~= multinode then
-						if input.layer then
-							max_other_layers = math.max(max_other_layers, input.layer)
-						else
-							max_other_layers = math.huge
-						end
+		for index, output in ipairs(multinode.outputs) do
+			local destination = output.multinode
+			local max_other_layers = 0
+			for _, input in ipairs(destination.inputs) do
+				if input ~= multinode then
+					if input.layer then
+						max_other_layers = math.max(max_other_layers, input.layer)
+					else
+						max_other_layers = math.huge
 					end
 				end
-				if max_other_layers >= #layers then
-					to_storage(level, multinode)
-				elseif destination.operator_.name == "ternary" then
-					to_storage(level, multinode)
-				elseif output.operand ~= 1 and not destination.operator_.commutative then
-					to_storage(level, multinode)
-				elseif chaining_output then
-					to_storage(level, multinode)
-				else
-					chaining_output = output
-					multinode.use_count = multinode.use_count - 1
-				end
+			end
+			if max_other_layers >= #layers then
+				to_storage(level, multinode)
+			elseif multinode.operator_.name == "ternary" then
+				to_storage(level, multinode)
+			elseif destination.operator_.name == "ternary" then
+				to_storage(level, multinode)
+			elseif output.operand ~= 1 and not destination.operator_.commutative then
+				to_storage(level, multinode)
+			elseif chaining_output then
+				to_storage(level, multinode)
+			else
+				chaining_output = output
 			end
 		end
 		mark_processed(multinode)
@@ -1171,12 +1185,14 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 		local emitted_something = false
 		while not nodes_ready:empty() and not layer_filled do
 			local candidate = nodes_ready:get()
-			nodes_ready:pop()
+			assert(candidate.enabled)
 			emitted_something = true
 			if candidate.type_ == "input" then
-				to_storage(level, candidate)
-				candidate.use_count = derive_use_count(candidate)
+				for _ in ipairs(candidate.outputs) do
+					to_storage(level, candidate)
+				end
 				mark_processed(candidate)
+				nodes_ready:pop()
 			elseif candidate.type_ == "constant" then
 				to_storage(level, candidate)
 				candidate.use_count = math.huge
@@ -1185,7 +1201,11 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 					value = candidate.constant,
 				})
 				mark_processed(candidate)
-			elseif not candidate.processed then
+				nodes_ready:pop()
+			elseif candidate.processed then
+				nodes_ready:pop()
+			else
+				local pop_first_candidate = true
 				while true do
 					assert(not candidate.processed)
 					local cslots_needed
@@ -1202,15 +1222,13 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 					end
 					local last_layer = open_layer()
 					if cslots_needed > cslots_left then
-						if chaining_output then
-							chain_to_storage(level)
-						end
 						layer_filled = true
 						break -- syntactically out of the candidate loop, but logically out of the ready node loop
 					end
 					if chaining_output then
 						for index, input in ipairs(candidate.inputs) do
 							if index ~= chaining_output.operand then
+								assert(input.storage_slot)
 								table.insert(last_layer, {
 									load_from = input.storage_slot,
 									filt_tmp = candidate.operator_.filt_tmp,
@@ -1221,11 +1239,13 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 						end
 						chaining_output = nil
 					else
+						assert(candidate.inputs[1].storage_slot)
 						table.insert(last_layer, {
 							load_from = candidate.inputs[1].storage_slot,
 							filt_tmp = 0,
 						})
 						decrease_use_count(candidate.inputs[1])
+						assert(candidate.inputs[2].storage_slot)
 						table.insert(last_layer, {
 							load_from = candidate.inputs[2].storage_slot,
 							filt_tmp = candidate.operator_.filt_tmp,
@@ -1234,6 +1254,10 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 						cslots_left = cslots_left - 2
 					end
 					produce_output(level, candidate)
+					if pop_first_candidate then
+						pop_first_candidate = false
+						nodes_ready:pop()
+					end
 					if not chaining_output then
 						break -- out of the candidate loop
 					end
@@ -1253,19 +1277,21 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 				local vnz_index = #ternary_group.flat_cond + 1
 				local vz_index = #ternary_group.flat_cond + 2
 				local first_ternary = ternary_group.multinodes[1]
+				local tentative_store_to_later = {}
 				for _, ternary in ipairs(ternary_group.multinodes) do
+					assert(ternary.inputs[vz_index].storage_slot)
 					table.insert(last_layer, {
 						load_from = ternary.inputs[vz_index].storage_slot,
 						filt_tmp = 0,
 					})
 					cslots_left = cslots_left - 1
 					decrease_use_count(ternary.inputs[vz_index])
-					to_storage(level, ternary)
-					last_layer[#last_layer].tentative_store_to = ternary.storage_slot
+					tentative_store_to_later[ternary] = last_layer[#last_layer]
 					last_layer[#last_layer].store_to = nil
 				end
 				for ix_input = #ternary_group.flat_cond, 1, -1 do
 					local input = first_ternary.inputs[ix_input]
+					assert(input.storage_slot)
 					table.insert(last_layer, {
 						load_from = input.storage_slot,
 						filt_tmp = ternary_group.flat_cond[ix_input].filt_tmp,
@@ -1276,15 +1302,16 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 					end
 				end
 				for _, ternary in ipairs(ternary_group.multinodes) do
+					assert(ternary.inputs[vnz_index].storage_slot)
 					table.insert(last_layer, {
 						load_from = ternary.inputs[vnz_index].storage_slot,
 						filt_tmp = 0,
-						store_to = ternary.storage_slot,
 					})
 					decrease_use_count(ternary.inputs[vnz_index])
 					cslots_left = cslots_left - 1
-					last_layer[#last_layer].store_to = ternary.storage_slot
 					produce_output(level, ternary)
+					last_layer[#last_layer].store_to = ternary.storage_slot
+					tentative_store_to_later[ternary].tentative_store_to = ternary.storage_slot
 				end
 				emitted_something = true
 				ternary_groups_ready:oo_pop(ix_ternary_group)
@@ -1297,6 +1324,20 @@ local function layer_markup(level, inputs_reverse, outputs, outputs_reverse, hie
 		nodes_ready:requeue(nodes_ready_next)
 		ternary_groups_ready:requeue(ternary_groups_ready_next)
 	end
+
+	for multinode in ts_hierarchy_down_iter(hierarchy) do
+		assert(multinode.processed)
+		if multinode.type_ ~= "constant" then
+			local expected_use_count = 0
+			for node in pairs(multinode.nodes) do
+				if outputs_reverse[node] then
+					expected_use_count = expected_use_count + 1
+				end
+			end
+			assert(multinode.use_count == expected_use_count)
+		end
+	end
+
 	table.sort(remapped_outputs, function(lhs, rhs)
 		return lhs.to < rhs.to
 	end)
@@ -1585,8 +1626,8 @@ local function lift_to_parts(level, constants, layers, computation_slots, storag
 			end
 			table.sort(stores, function(lhs, rhs)
 				if lhs.to ~= rhs.to then return lhs.to < rhs.to end
-				lhs_t_score = store_tentative_score[lhs.macro]
-				rhs_t_score = store_tentative_score[rhs.macro]
+				local lhs_t_score = store_tentative_score[lhs.macro]
+				local rhs_t_score = store_tentative_score[rhs.macro]
 				if lhs_t_score ~= rhs_t_score then return lhs_t_score < rhs_t_score end
 				return false
 			end)
