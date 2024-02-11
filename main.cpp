@@ -67,6 +67,7 @@ namespace
 			int32_t linkIndicesIndex = -1;
 		};
 		std::array<Direction, linkMax> directions;
+		int32_t upstreamOutputIndex = -1;
 	};
 
 	struct Node
@@ -82,6 +83,14 @@ namespace
 		std::array<std::vector<int32_t>, linkMax> linkIndices;
 		std::vector<int32_t> tmps;
 		int32_t workSlotsNeeded = -1;
+		std::vector<int32_t> sources;
+	};
+
+	struct Source
+	{
+		int32_t nodeIndex;
+		int32_t outputIndex;
+		int32_t uses = 0;
 	};
 
 	struct Move
@@ -100,6 +109,7 @@ namespace
 	struct Tree
 	{
 		int32_t workSlots;
+		int32_t storageSlots;
 		int32_t constantCount;
 		int32_t inputCount;
 		int32_t compositeCount;
@@ -107,6 +117,15 @@ namespace
 		std::vector<Node> nodes;
 		std::vector<Link> links;
 		std::vector<Tmp> tmps;
+		std::vector<Source> sources;
+
+		double storageSlotOverheadPenalty;
+		int32_t commitCost;
+		int32_t loadCost;
+		int32_t cloadCost;
+		int32_t modeCost;
+		int32_t storeCost;
+		int32_t cstoreCost;
 
 		State Initial() const;
 
@@ -364,10 +383,155 @@ namespace
 			return neighbour;
 		}
 
-		double Energy() const
+		struct Energy
 		{
-			// TODO
-			return 0.0;
+			double linear;
+			int32_t storageSlotCount;
+			int32_t partCount;
+		};
+		Energy GetEnergy() const
+		{
+			int32_t partCount = 0;
+			auto nodeIndexToLayerIndex = NodeIndexToLayerIndex();
+			struct Storage
+			{
+				int32_t usesLeft;
+				int32_t slotIndex;
+			};
+			std::vector<std::optional<int32_t>> slots;
+			std::vector<Storage> storage(tree->sources.size(), { 0, -1 });
+			auto allocStorage = [this, &storage, &slots](int32_t sourceIndex) {
+				std::optional<int32_t> freeSlotIndex;
+				for (int32_t slotIndex = 0; slotIndex < int32_t(slots.size()); ++slotIndex)
+				{
+					if (!slots[slotIndex])
+					{
+						freeSlotIndex = slotIndex;
+						break;
+					}
+				}
+				if (!freeSlotIndex)
+				{
+					freeSlotIndex = slots.size();
+					slots.emplace_back();
+				}
+				slots[*freeSlotIndex] = sourceIndex;
+				storage[sourceIndex] = { tree->sources[sourceIndex].uses, *freeSlotIndex };
+			};
+			auto useStorage = [&storage, &slots](int32_t sourceIndex) {
+				auto slotIndex = storage[sourceIndex].slotIndex;
+				auto &usesLeft = storage[sourceIndex].usesLeft;
+				if (usesLeft != -1)
+				{
+					assert(usesLeft > 0);
+					usesLeft -= 1;
+					if (!usesLeft)
+					{
+						slots[slotIndex] = std::nullopt;
+					}
+				}
+				return slotIndex;
+			};
+			for (int32_t constantIndex = 0; constantIndex < tree->constantCount; ++constantIndex)
+			{
+				auto nodeIndex = constantIndex;
+				auto &node = tree->nodes[nodeIndex];
+				auto sourceIndex = node.sources[0];
+				allocStorage(sourceIndex);
+				storage[sourceIndex].usesLeft = -1; // constants have infinite uses
+			}
+			for (int32_t inputIndex = 0; inputIndex < tree->inputCount; ++inputIndex)
+			{
+				auto nodeIndex = tree->constantCount + inputIndex;
+				auto &node = tree->nodes[nodeIndex];
+				auto sourceIndex = node.sources[0];
+				allocStorage(sourceIndex);
+			}
+			for (int32_t layerIndex = 1; layerIndex < int32_t(layers.size()) - 1; ++layerIndex)
+			{
+				partCount += tree->commitCost;
+				auto doStore = [this, &partCount, &allocStorage](int32_t sourceIndex, bool conditional) {
+					partCount += conditional ? tree->cstoreCost : tree->storeCost;
+					allocStorage(sourceIndex);
+				};
+				std::vector<std::vector<int32_t>> tmpLoads(tree->tmps.size(), std::vector<int32_t>(slots.size(), 0));
+				auto doLoad = [&partCount, &useStorage, &tmpLoads](int32_t sourceIndex, int32_t tmp) {
+					auto slotIndex = useStorage(sourceIndex);
+					tmpLoads[tmp][slotIndex] += 1;
+				};
+				auto layerBegin = LayerBegins(layerIndex);
+				auto layerEnd = LayerBegins(layerIndex + 1);
+				for (int32_t nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
+				{
+					auto nodeIndex = nodeIndices[nodeIndicesIndex];
+					auto &node = tree->nodes[nodeIndex];
+					for (auto linkIndex : node.linkIndices[linkUpstream])
+					{
+						auto &link = tree->links[linkIndex];
+						auto linkedNodeIndex = link.directions[linkUpstream].nodeIndex;
+						auto &linkedNode = tree->nodes[linkedNodeIndex];
+						auto linkIndicesIndex = link.directions[linkDownstream].linkIndicesIndex;
+						if (!(nodeIndexToLayerIndex[linkedNodeIndex] == layerIndex && (linkIndicesIndex < 2 ||
+						                                                               link.type == Link::toSelectZero)))
+						{
+							auto loadTmp = 0;
+							if (link.type == Link::toBinary && linkIndicesIndex > 0)
+							{
+								loadTmp = node.tmps[linkIndicesIndex - 1];
+							}
+							doLoad(linkedNode.sources[link.upstreamOutputIndex], loadTmp);
+						}
+					}
+					if (node.type == Node::select)
+					{
+						for (int32_t sourcesIndex : node.sources)
+						{
+							doStore(sourcesIndex, false);
+							doStore(sourcesIndex, true);
+						}
+					}
+					else
+					{
+						auto needsStore = false;
+						for (auto linkIndex : node.linkIndices[linkDownstream])
+						{
+							auto &link = tree->links[linkIndex];
+							auto linkedNodeIndex = link.directions[linkDownstream].nodeIndex;
+							if (!(nodeIndexToLayerIndex[linkedNodeIndex] == layerIndex))
+							{
+								needsStore = true;
+							}
+						}
+						if (needsStore)
+						{
+							doStore(node.sources[0], false);
+						}
+					}
+				}
+				for (auto &tmpLoad : tmpLoads)
+				{
+					auto modeUsed = false;
+					for (auto slot : tmpLoad)
+					{
+						if (slot)
+						{
+							modeUsed = true;
+							partCount += tree->loadCost + (slot - 1) * tree->cloadCost;
+						}
+					}
+					if (modeUsed)
+					{
+						partCount += tree->modeCost;
+					}
+				}
+			}
+			auto storageSlotCount = int32_t(slots.size());
+			auto storageSlotOverhead = std::max(0, storageSlotCount - tree->storageSlots);
+			return {
+				double(partCount) + double(storageSlotOverhead) * tree->storageSlotOverheadPenalty,
+				storageSlotCount,
+				partCount,
+			};
 		}
 	};
 
@@ -390,8 +554,11 @@ namespace
 
 	double TransitionProbability(double energy, double newEnergy, double temp)
 	{
-		// TODO
-		return 1.0;
+		if (newEnergy < energy)
+		{
+			return 1.0;
+		}
+		return std::exp(-(newEnergy - energy) / temp);
 	}
 
 	std::istream &operator >>(std::istream &stream, Tree &tree)
@@ -399,37 +566,31 @@ namespace
 		constexpr int32_t bigNumber = 10000;
 		std::ios::sync_with_stdio(false);
 		int32_t tmpCount;
-		stream >> tmpCount >> tree.workSlots >> CheckCin();
+		stream >> tmpCount >> tree.workSlots >> tree.storageSlots >> CheckCin();
 		checkRange(tmpCount, 1, bigNumber);
 		checkRange(tree.workSlots, 2, bigNumber);
+		checkRange(tree.storageSlots, 1, bigNumber);
 		tree.tmps.resize(tmpCount);
 		for (auto &tmp : tree.tmps)
 		{
 			stream >> tmp.commutative >> CheckCin();
 		}
+		stream >> tree.storageSlotOverheadPenalty >> tree.commitCost >> tree.loadCost >> tree.cloadCost >> tree.modeCost >> tree.storeCost >> tree.cstoreCost;
 		stream >> tree.constantCount >> tree.inputCount >> tree.compositeCount >> tree.outputCount >> CheckCin();
 		checkRange(tree.constantCount, 0, bigNumber);
 		checkRange(tree.inputCount, 1, bigNumber);
 		checkRange(tree.compositeCount, 1, bigNumber);
 		checkRange(tree.outputCount, 1, bigNumber);
+		checkRange(tree.inputCount + tree.constantCount, 0, tree.storageSlots + 1);
+		checkRange(tree.outputCount + tree.constantCount, 0, tree.storageSlots + 1);
 		tree.nodes.resize(tree.constantCount + tree.inputCount + tree.compositeCount + tree.outputCount);
 		auto tmpSelect = tmpCount;
 		auto maxInnerTmp = tmpCount;
 		auto maxOuterTmp = tmpCount + 1;
-		auto maxSource = tree.constantCount + tree.inputCount;
-		for (int32_t constantIndex = 0; constantIndex < tree.constantCount; ++constantIndex)
-		{
-			auto nodeIndex = constantIndex;
-			auto &constant = tree.nodes[nodeIndex];
-			constant.type = Node::constant;
-		}
-		for (int32_t inputIndex = 0; inputIndex < tree.inputCount; ++inputIndex)
-		{
-			auto nodeIndex = tree.constantCount + inputIndex;
-			auto &input = tree.nodes[nodeIndex];
-			input.type = Node::input;
-		}
-		auto link = [&tree](Node &node, uint32_t nodeIndex, Link::LinkType linkType) {
+		auto link = [&tree](Node &node, uint32_t sourceIndex, Link::LinkType linkType) {
+			auto &source = tree.sources[sourceIndex];
+			source.uses += 1;
+			auto nodeIndex = source.nodeIndex;
 			auto &linkedNode = tree.nodes[nodeIndex];
 			auto linkIndex = tree.links.size();
 			Link &link = tree.links.emplace_back();
@@ -438,9 +599,28 @@ namespace
 			link.directions[linkDownstream].nodeIndex = &node - &tree.nodes[0];
 			link.directions[linkUpstream].linkIndicesIndex = linkedNode.linkIndices[linkDownstream].size();
 			link.directions[linkDownstream].linkIndicesIndex = node.linkIndices[linkUpstream].size();
+			link.upstreamOutputIndex = source.outputIndex;
 			linkedNode.linkIndices[linkDownstream].push_back(linkIndex);
 			node.linkIndices[linkUpstream].push_back(linkIndex);
 		};
+		auto presentSource = [&tree](int32_t nodeIndex, int32_t outputIndex) {
+			tree.nodes[nodeIndex].sources.push_back(int32_t(tree.sources.size()));
+			tree.sources.push_back({ nodeIndex, outputIndex });
+		};
+		for (int32_t constantIndex = 0; constantIndex < tree.constantCount; ++constantIndex)
+		{
+			auto nodeIndex = constantIndex;
+			auto &constant = tree.nodes[nodeIndex];
+			constant.type = Node::constant;
+			presentSource(nodeIndex, 0);
+		}
+		for (int32_t inputIndex = 0; inputIndex < tree.inputCount; ++inputIndex)
+		{
+			auto nodeIndex = tree.constantCount + inputIndex;
+			auto &input = tree.nodes[nodeIndex];
+			input.type = Node::input;
+			presentSource(nodeIndex, 0);
+		}
 		for (int32_t compositeIndex = 0; compositeIndex < tree.compositeCount; ++compositeIndex)
 		{
 			auto nodeIndex = tree.constantCount + tree.inputCount + compositeIndex;
@@ -462,8 +642,8 @@ namespace
 				{
 					int32_t nonzeroSource, zeroSource;
 					stream >> nonzeroSource >> zeroSource >> CheckCin();
-					checkRange(nonzeroSource, 0, maxSource);
-					checkRange(zeroSource, 0, maxSource);
+					checkRange(nonzeroSource, 0, tree.sources.size());
+					checkRange(zeroSource, 0, tree.sources.size());
 					link(node, nonzeroSource, Link::toSelectNonzero);
 					link(node, zeroSource, Link::toSelectZero);
 				}
@@ -478,10 +658,13 @@ namespace
 					}
 					int32_t source;
 					stream >> source >> CheckCin();
-					checkRange(source, 0, maxSource);
+					checkRange(source, 0, tree.sources.size());
 					link(node, source, Link::toBinary);
 				}
-				maxSource += laneCount;
+				for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
+				{
+					presentSource(nodeIndex, laneIndex);
+				}
 			}
 			else
 			{
@@ -490,12 +673,12 @@ namespace
 				node.tmps[0] = tmp;
 				int32_t rhsSource, lhsSource;
 				stream >> rhsSource >> lhsSource >> CheckCin();
-				checkRange(rhsSource, 0, maxSource);
-				checkRange(lhsSource, 0, maxSource);
+				checkRange(rhsSource, 0, tree.sources.size());
+				checkRange(lhsSource, 0, tree.sources.size());
 				link(node, rhsSource, Link::toBinary);
 				link(node, lhsSource, Link::toBinary);
 				node.workSlotsNeeded = 2;
-				maxSource += 1;
+				presentSource(nodeIndex, 0);
 			}
 		}
 		for (int32_t outputIndex = 0; outputIndex < tree.outputCount; ++outputIndex)
@@ -504,7 +687,7 @@ namespace
 			auto &node = tree.nodes[nodeIndex];
 			int32_t outputSource;
 			stream >> outputSource >> CheckCin();
-			checkRange(outputSource, 0, maxSource);
+			checkRange(outputSource, 0, tree.sources.size());
 			node.type = Node::output;
 			link(node, outputSource, Link::toOutput);
 		}
@@ -513,7 +696,8 @@ namespace
 
 	std::ostream &operator <<(std::ostream &stream, const State &state)
 	{
-		stream << "============= BEGIN STATE =============" << std::endl;
+		auto energy = state.GetEnergy();
+		stream << "============= BEGIN STATE " << energy.storageSlotCount << " " << energy.partCount << " =============" << std::endl;
 		for (int32_t layerIndex = 1; layerIndex < int32_t(state.layers.size()) - 1; ++layerIndex)
 		{
 			auto layerBegin = state.LayerBegins(layerIndex);
@@ -533,8 +717,8 @@ namespace
 int main()
 {
 	constexpr auto tempInit = 1.0;
-	constexpr auto tempFini = 1e-7;
-	constexpr auto tempLoss = 0.99999;
+	constexpr auto tempFini = 1e-5;
+	constexpr auto tempLoss = 1e-7;
 	std::random_device rd;
 	std::mt19937_64 rng(rd());
 	std::uniform_real_distribution<double> rdist(0.0, 1.0);
@@ -543,15 +727,24 @@ int main()
 	State state = tree.Initial();
 	std::cerr << state;
 	auto temp = tempInit;
+	int32_t count = 0;
 	while (temp > tempFini)
 	{
 		auto newState = state.RandomNeighbour(rng);
-		if (TransitionProbability(state.Energy(), newState.Energy(), temp) >= rdist(rng))
+		auto energyLinear = state.GetEnergy().linear;
+		auto newEnergyLinear = newState.GetEnergy().linear;
+		if (TransitionProbability(energyLinear, newEnergyLinear, temp) >= rdist(rng))
 		{
 			state = std::move(newState);
-			std::cerr << state;
+			count += 1;
+			if (count == 10000)
+			{
+				count = 0;
+				std::cerr << state;
+			}
 		}
-		temp *= tempLoss;
+		temp -= tempLoss;
+		// temp *= tempLoss;
 	}
 	return 0;
 }
