@@ -175,6 +175,22 @@ local function fold_equivalent(output_keys)
 		end
 		return constants[value]
 	end
+	local ids = id_store.make_id_store()
+	local composites = {}
+	local function get_composite(expr)
+		local lhs_id = ids:get(expr.params_.lhs)
+		local rhs_id = ids:get(expr.params_.rhs)
+		if expr.info_.commutative then
+			lhs_id, rhs_id = math.min(lhs_id, rhs_id), math.max(lhs_id, rhs_id)
+		end
+		local composite_key = ("%i %i %i"):format(lhs_id, expr.info_.filt_tmp, rhs_id)
+		if composites[composite_key] then
+			composites[composite_key].label_ = composites[composite_key].label_ .. "+" .. expr.label_
+		else
+			composites[composite_key] = expr
+		end
+		return composites[composite_key]
+	end
 	return lift(output_keys, function(expr, lifted)
 		local new_expr = setmetatable({}, user_node.mt_)
 		for key, value in pairs(expr) do
@@ -195,8 +211,12 @@ local function fold_equivalent(output_keys)
 				end
 				new_expr.params_[name] = new_param
 			end
-			if fold_to_constant and expr.info_.method == "filt_tmp" then
-				new_expr = get_constant(new_expr.info_.exec(unpack(constant_params)))
+			if expr.info_.method == "filt_tmp" and not expr.marked_zeroable_ then
+				if fold_to_constant then
+					new_expr = get_constant(new_expr.info_.exec(unpack(constant_params)))
+				else
+					new_expr = get_composite(new_expr)
+				end
 			end
 		end
 		new_expr.user_node_ = expr
