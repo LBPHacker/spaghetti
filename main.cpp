@@ -6,6 +6,7 @@
 #include <iostream>
 #include <optional>
 #include <random>
+#include <variant>
 #include <vector>
 
 namespace
@@ -176,9 +177,20 @@ namespace
 								// binary same-layer link with non-adjacent node
 								return std::nullopt;
 							}
-							if (link.directions[linkDownstream].linkIndicesIndex == 1 && !tmps[linkedNode.tmps[0]].commutative)
+							int32_t lhsIndex = 1;
+							if (linkedNode.type == Node::select)
+							{
+								auto laneCount = int32_t(linkedNode.sources.size());
+								lhsIndex += laneCount * 2;
+							}
+							if (link.directions[linkDownstream].linkIndicesIndex == lhsIndex && !tmps[linkedNode.tmps[0]].commutative)
 							{
 								// binary same-layer link to lhs of non-commutative node
+								return std::nullopt;
+							}
+							if (link.directions[linkDownstream].linkIndicesIndex > lhsIndex)
+							{
+								// binary same-layer link to parameter of higher index than that of rhs or lhs
 								return std::nullopt;
 							}
 							sameLayerBinaryLinkCount += 1;
@@ -212,6 +224,7 @@ namespace
 
 	struct State
 	{
+		int32_t iteration;
 		const Tree *tree{};
 		std::vector<int32_t> nodeIndices;
 		std::vector<int32_t> layers;
@@ -332,6 +345,7 @@ namespace
 			}
 			auto move = moves[rng() % moves.size()];
 			State neighbour;
+			neighbour.iteration = iteration + 1;
 			neighbour.tree = tree;
 			auto nodeIndexToLayerIndex = NodeIndexToLayerIndex();
 			for (int32_t layerIndex2 = 0; layerIndex2 < int32_t(layers.size()) * 2; ++layerIndex2)
@@ -383,15 +397,72 @@ namespace
 			return neighbour;
 		}
 
+		struct Commit
+		{
+		};
+		struct Load
+		{
+			int32_t nodeIndex;
+			int32_t tmp;
+			int32_t workSlot;
+			int32_t storageSlot;
+		};
+		struct Cload
+		{
+			int32_t nodeIndex;
+			int32_t tmp;
+			int32_t workSlot;
+			int32_t storageSlot;
+		};
+		struct Mode
+		{
+			int32_t workSlot;
+			int32_t tmp;
+		};
+		struct Store
+		{
+			int32_t workSlot;
+			int32_t storageSlot;
+		};
+		struct Cstore
+		{
+			int32_t workSlot;
+			int32_t storageSlot;
+		};
+		struct AllocStorage
+		{
+			int32_t sourceIndex;
+			int32_t storageSlot;
+			int32_t uses;
+		};
+		struct UseStorage
+		{
+			int32_t storageSlot;
+		};
+		using PlanStep = std::variant<
+			Commit,
+			Load,
+			Cload,
+			Mode,
+			Store,
+			Cstore,
+			AllocStorage,
+			UseStorage
+		>;
 		struct Energy
 		{
 			double linear;
 			int32_t storageSlotCount;
-			int32_t partCount;
-		};
-		Energy GetEnergy() const
-		{
 			int32_t partCount = 0;
+		};
+		struct Plan : public Energy
+		{
+			std::vector<PlanStep> steps;
+		};
+		template<class EnergyType>
+		EnergyType GetEnergy() const
+		{
+			EnergyType energy;
 			auto nodeIndexToLayerIndex = NodeIndexToLayerIndex();
 			struct Storage
 			{
@@ -400,7 +471,7 @@ namespace
 			};
 			std::vector<std::optional<int32_t>> slots;
 			std::vector<Storage> storage(tree->sources.size(), { 0, -1 });
-			auto allocStorage = [this, &storage, &slots](int32_t sourceIndex) {
+			auto allocStorage = [this, &energy, &storage, &slots](int32_t sourceIndex, bool forConstant) {
 				std::optional<int32_t> freeSlotIndex;
 				for (int32_t slotIndex = 0; slotIndex < int32_t(slots.size()); ++slotIndex)
 				{
@@ -416,9 +487,19 @@ namespace
 					slots.emplace_back();
 				}
 				slots[*freeSlotIndex] = sourceIndex;
-				storage[sourceIndex] = { tree->sources[sourceIndex].uses, *freeSlotIndex };
+				auto uses = tree->sources[sourceIndex].uses;
+				if (forConstant)
+				{
+					uses = -1; // constants have infinite uses
+				}
+				storage[sourceIndex] = { uses, *freeSlotIndex };
+				if constexpr (std::is_same_v<EnergyType, Plan>)
+				{
+					energy.steps.push_back(AllocStorage{ sourceIndex, *freeSlotIndex, uses });
+				}
+				return *freeSlotIndex;
 			};
-			auto useStorage = [&storage, &slots](int32_t sourceIndex) {
+			auto useStorage = [&energy, &storage, &slots](int32_t sourceIndex) {
 				auto slotIndex = storage[sourceIndex].slotIndex;
 				auto &usesLeft = storage[sourceIndex].usesLeft;
 				if (usesLeft != -1)
@@ -430,6 +511,10 @@ namespace
 						slots[slotIndex] = std::nullopt;
 					}
 				}
+				if constexpr (std::is_same_v<EnergyType, Plan>)
+				{
+					energy.steps.push_back(UseStorage{ slotIndex });
+				}
 				return slotIndex;
 			};
 			for (int32_t constantIndex = 0; constantIndex < tree->constantCount; ++constantIndex)
@@ -437,101 +522,187 @@ namespace
 				auto nodeIndex = constantIndex;
 				auto &node = tree->nodes[nodeIndex];
 				auto sourceIndex = node.sources[0];
-				allocStorage(sourceIndex);
-				storage[sourceIndex].usesLeft = -1; // constants have infinite uses
+				allocStorage(sourceIndex, true);
 			}
 			for (int32_t inputIndex = 0; inputIndex < tree->inputCount; ++inputIndex)
 			{
 				auto nodeIndex = tree->constantCount + inputIndex;
 				auto &node = tree->nodes[nodeIndex];
 				auto sourceIndex = node.sources[0];
-				allocStorage(sourceIndex);
+				allocStorage(sourceIndex, false);
+			}
+			if constexpr (std::is_same_v<EnergyType, Plan>)
+			{
+				energy.steps.push_back(Commit{});
 			}
 			for (int32_t layerIndex = 1; layerIndex < int32_t(layers.size()) - 1; ++layerIndex)
 			{
-				partCount += tree->commitCost;
-				auto doStore = [this, &partCount, &allocStorage](int32_t sourceIndex, bool conditional) {
-					partCount += conditional ? tree->cstoreCost : tree->storeCost;
-					allocStorage(sourceIndex);
-				};
-				std::vector<std::vector<int32_t>> tmpLoads(tree->tmps.size(), std::vector<int32_t>(slots.size(), 0));
-				auto doLoad = [&partCount, &useStorage, &tmpLoads](int32_t sourceIndex, int32_t tmp) {
-					auto slotIndex = useStorage(sourceIndex);
-					tmpLoads[tmp][slotIndex] += 1;
-				};
-				auto layerBegin = LayerBegins(layerIndex);
-				auto layerEnd = LayerBegins(layerIndex + 1);
-				for (int32_t nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
-				{
-					auto nodeIndex = nodeIndices[nodeIndicesIndex];
-					auto &node = tree->nodes[nodeIndex];
-					for (auto linkIndex : node.linkIndices[linkUpstream])
+				auto doStore = [this, &energy, &allocStorage](int32_t workSlotIndex, int32_t sourceIndex) {
+					auto storageSlotIndex = allocStorage(sourceIndex, false);
+					energy.partCount += tree->storeCost;
+					if constexpr (std::is_same_v<EnergyType, Plan>)
 					{
-						auto &link = tree->links[linkIndex];
-						auto linkedNodeIndex = link.directions[linkUpstream].nodeIndex;
-						auto &linkedNode = tree->nodes[linkedNodeIndex];
-						auto linkIndicesIndex = link.directions[linkDownstream].linkIndicesIndex;
-						if (!(nodeIndexToLayerIndex[linkedNodeIndex] == layerIndex && (linkIndicesIndex < 2 ||
-						                                                               link.type == Link::toSelectZero)))
-						{
-							auto loadTmp = 0;
-							if (link.type == Link::toBinary && linkIndicesIndex > 0)
-							{
-								loadTmp = node.tmps[linkIndicesIndex - 1];
-							}
-							doLoad(linkedNode.sources[link.upstreamOutputIndex], loadTmp);
-						}
+						energy.steps.push_back(Store{ workSlotIndex, storageSlotIndex });
 					}
-					if (node.type == Node::select)
+					return storageSlotIndex;
+				};
+				auto doCstore = [this, &energy](int32_t workSlotIndex, int32_t sourceIndex, int32_t storageSlotIndex) {
+					energy.partCount += tree->cstoreCost;
+					if constexpr (std::is_same_v<EnergyType, Plan>)
 					{
-						for (int32_t sourcesIndex : node.sources)
+						energy.steps.push_back(Cstore{ workSlotIndex, storageSlotIndex });
+					}
+				};
+				struct TmpLoad
+				{
+					bool used;
+					std::vector<int32_t> slotUsed; // std::vector<bool> is stupid
+				};
+				std::vector<TmpLoad> tmpLoads(tree->tmps.size(), { false, std::vector<int32_t>(slots.size(), 0) });
+				auto doLoad = [this, &energy, &useStorage, &tmpLoads](int32_t nodeIndex, int32_t workSlotIndex, int32_t sourceIndex, int32_t tmp) {
+					auto storageSlotIndex = useStorage(sourceIndex);
+					if (!tmpLoads[tmp].used)
+					{
+						energy.partCount += tree->modeCost;
+						if constexpr (std::is_same_v<EnergyType, Plan>)
 						{
-							doStore(sourcesIndex, false);
-							doStore(sourcesIndex, true);
+							energy.steps.push_back(Mode{ workSlotIndex, tmp });
+						}
+						tmpLoads[tmp].used = true;
+					}
+					if (tmpLoads[tmp].slotUsed[storageSlotIndex])
+					{
+						energy.partCount += tree->cloadCost;
+						if constexpr (std::is_same_v<EnergyType, Plan>)
+						{
+							energy.steps.push_back(Cload{ nodeIndex, tmp, workSlotIndex, storageSlotIndex });
 						}
 					}
 					else
 					{
+						tmpLoads[tmp].slotUsed[storageSlotIndex] = 1;
+						energy.partCount += tree->loadCost;
+						if constexpr (std::is_same_v<EnergyType, Plan>)
+						{
+							energy.steps.push_back(Load{ nodeIndex, tmp, workSlotIndex, storageSlotIndex });
+						}
+					}
+				};
+				auto layerBegin = LayerBegins(layerIndex);
+				auto layerEnd = LayerBegins(layerIndex + 1);
+				int32_t workSlotsUsed = 0;
+				std::vector<int32_t> selectStorageSlotIndices;
+				{
+					auto &lastNode = tree->nodes[nodeIndices[layerEnd - 1]];
+					if (lastNode.type == Node::select)
+					{
+						selectStorageSlotIndices.resize(lastNode.sources.size(), -1);
+					}
+				}
+				for (int32_t nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
+				{
+					auto nodeIndex = nodeIndices[nodeIndicesIndex];
+					auto &node = tree->nodes[nodeIndex];
+					auto toSelectZeroLinkToSourceIndex = [this](const Link &link) {
+						auto &node = tree->nodes[link.directions[linkDownstream].nodeIndex];
+						auto laneIndex = (link.directions[linkDownstream].linkIndicesIndex - 1) / 2;
+						return std::pair<int32_t, int32_t>{ laneIndex, node.sources[laneIndex] };
+					};
+					auto doLinkUpstream = [
+						this,
+						nodeIndex,
+						&energy,
+						&selectStorageSlotIndices,
+						&nodeIndexToLayerIndex,
+						&workSlotsUsed,
+						&doLoad,
+						&doStore,
+						&toSelectZeroLinkToSourceIndex,
+						layerIndex
+					](int32_t linkIndicesIndex) {
+						auto &node = tree->nodes[nodeIndex];
+						auto linkIndex = node.linkIndices[linkUpstream][linkIndicesIndex];
+						auto &link = tree->links[linkIndex];
+						auto linkedNodeIndex = link.directions[linkUpstream].nodeIndex;
+						auto &linkedNode = tree->nodes[linkedNodeIndex];
+						if (nodeIndexToLayerIndex[linkedNodeIndex] != layerIndex)
+						{
+							auto loadTmp = 0;
+							auto stageIndex = linkIndicesIndex;
+							if (node.type == Node::select)
+							{
+								auto laneCount = int32_t(node.sources.size());
+								stageIndex -= laneCount * 2;
+							}
+							if (link.type == Link::toBinary && stageIndex > 0)
+							{
+								loadTmp = node.tmps[stageIndex - 1];
+							}
+							doLoad(nodeIndex, workSlotsUsed, linkedNode.sources[link.upstreamOutputIndex], loadTmp);
+							workSlotsUsed += 1;
+							if (link.type == Link::toSelectZero)
+							{
+								auto [ laneIndex, sourceIndex ] = toSelectZeroLinkToSourceIndex(link);
+								selectStorageSlotIndices[laneIndex] = doStore(workSlotsUsed - 1, sourceIndex);
+							}
+						}
+					};
+					if (node.type == Node::select)
+					{
+						auto stageCount = int32_t(node.tmps.size() + 1);
+						auto laneCount = int32_t(node.sources.size());
+						for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
+						{
+							doLinkUpstream(laneIndex * 2 + 1);
+						};
+						for (int32_t stageIndex = 0; stageIndex < stageCount; ++stageIndex)
+						{
+							doLinkUpstream(laneCount * 2 + stageIndex);
+						};
+						for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
+						{
+							doLinkUpstream(laneIndex * 2);
+							doCstore(workSlotsUsed - 1, node.sources[laneIndex], selectStorageSlotIndices[laneIndex]);
+						};
+					}
+					else
+					{
+						for (int32_t linkIndicesIndex = 0; linkIndicesIndex < int32_t(node.linkIndices[linkUpstream].size()); ++linkIndicesIndex)
+						{
+							doLinkUpstream(linkIndicesIndex);
+						}
 						auto needsStore = false;
 						for (auto linkIndex : node.linkIndices[linkDownstream])
 						{
 							auto &link = tree->links[linkIndex];
 							auto linkedNodeIndex = link.directions[linkDownstream].nodeIndex;
-							if (!(nodeIndexToLayerIndex[linkedNodeIndex] == layerIndex))
+							if (nodeIndexToLayerIndex[linkedNodeIndex] != layerIndex)
 							{
 								needsStore = true;
+							}
+							if (nodeIndexToLayerIndex[linkedNodeIndex] == layerIndex && link.type == Link::toSelectZero)
+							{
+								auto [ laneIndex, sourceIndex ] = toSelectZeroLinkToSourceIndex(link);
+								selectStorageSlotIndices[laneIndex] = doStore(workSlotsUsed - 1, sourceIndex);
 							}
 						}
 						if (needsStore)
 						{
-							doStore(node.sources[0], false);
+							doStore(workSlotsUsed - 1, node.sources[0]);
 						}
 					}
 				}
-				for (auto &tmpLoad : tmpLoads)
+				energy.partCount += tree->commitCost;
+				if constexpr (std::is_same_v<EnergyType, Plan>)
 				{
-					auto modeUsed = false;
-					for (auto slot : tmpLoad)
-					{
-						if (slot)
-						{
-							modeUsed = true;
-							partCount += tree->loadCost + (slot - 1) * tree->cloadCost;
-						}
-					}
-					if (modeUsed)
-					{
-						partCount += tree->modeCost;
-					}
+					energy.steps.push_back(Commit{});
 				}
 			}
 			auto storageSlotCount = int32_t(slots.size());
 			auto storageSlotOverhead = std::max(0, storageSlotCount - tree->storageSlots);
-			return {
-				double(partCount) + double(storageSlotOverhead) * tree->storageSlotOverheadPenalty,
-				storageSlotCount,
-				partCount,
-			};
+			energy.linear = double(energy.partCount) + double(storageSlotOverhead) * tree->storageSlotOverheadPenalty;
+			energy.storageSlotCount = storageSlotCount;
+			return energy;
 		}
 	};
 
@@ -539,6 +710,7 @@ namespace
 	{
 		State state;
 		state.tree = this;
+		state.iteration = 0;
 		for (int32_t nodeIndex = 0; nodeIndex < int32_t(nodes.size()); ++nodeIndex)
 		{
 			state.nodeIndices.push_back(nodeIndex);
@@ -575,6 +747,7 @@ namespace
 		{
 			stream >> tmp.commutative >> CheckCin();
 		}
+		tree.tmps.insert(tree.tmps.begin(), { false });
 		stream >> tree.storageSlotOverheadPenalty >> tree.commitCost >> tree.loadCost >> tree.cloadCost >> tree.modeCost >> tree.storeCost >> tree.cstoreCost;
 		stream >> tree.constantCount >> tree.inputCount >> tree.compositeCount >> tree.outputCount >> CheckCin();
 		checkRange(tree.constantCount, 0, bigNumber);
@@ -654,7 +827,7 @@ namespace
 						int32_t tmp;
 						stream >> tmp >> CheckCin();
 						checkRange(tmp, 0, maxInnerTmp);
-						node.tmps[stageIndex - 1] = tmp;
+						node.tmps[stageIndex - 1] = tmp + 1;
 					}
 					int32_t source;
 					stream >> source >> CheckCin();
@@ -670,7 +843,7 @@ namespace
 			{
 				node.type = Node::binary;
 				node.tmps.resize(1);
-				node.tmps[0] = tmp;
+				node.tmps[0] = tmp + 1;
 				int32_t rhsSource, lhsSource;
 				stream >> rhsSource >> lhsSource >> CheckCin();
 				checkRange(rhsSource, 0, tree.sources.size());
@@ -696,20 +869,211 @@ namespace
 
 	std::ostream &operator <<(std::ostream &stream, const State &state)
 	{
-		auto energy = state.GetEnergy();
-		stream << "============= BEGIN STATE " << energy.storageSlotCount << " " << energy.partCount << " =============" << std::endl;
+		stream << std::setfill('0');
+		auto plan = state.GetEnergy<State::Plan>();
+		stream << " >>> successful transitions: " << state.iteration << std::endl;
+		stream << " >>>     storage slot count: " << plan.storageSlotCount << std::endl;
+		stream << " >>>         particle count: " << plan.partCount << std::endl;
+		stream << " ";
+		for (int32_t columnIndex = 0; columnIndex < state.tree->storageSlots; ++columnIndex)
+		{
+			stream << "___ ";
+		}
+		stream << "  ";
+		for (int32_t columnIndex = 0; columnIndex < state.tree->workSlots; ++columnIndex)
+		{
+			stream << "_________ ";
+		}
+		stream << std::endl;
+		int32_t planIndex = 0;
+		struct StorageSlot
+		{
+			int32_t sourceIndex;
+			int32_t usesLeft;
+		};
+		std::vector<StorageSlot> storageSlots(state.tree->storageSlots);
+		auto handleStoragePlanStep = [&storageSlots](State::PlanStep &step) {
+			if (auto *allocStorage = std::get_if<State::AllocStorage>(&step))
+			{
+				storageSlots[allocStorage->storageSlot] = { allocStorage->sourceIndex, allocStorage->uses };
+			}
+			else if (auto *useStorage = std::get_if<State::UseStorage>(&step))
+			{
+				if (storageSlots[useStorage->storageSlot].usesLeft > 0)
+				{
+					storageSlots[useStorage->storageSlot].usesLeft -= 1;
+				}
+			}
+		};
+		auto emitStorageSlotsTop = [&stream](const std::vector<StorageSlot> &storageSlots) {
+			stream << "|";
+			for (auto &storageSlot : storageSlots)
+			{
+				if (storageSlot.usesLeft)
+				{
+					stream << std::setw(3) << storageSlot.sourceIndex;
+				}
+				else
+				{
+					stream << "   ";
+				}
+				stream << "|";
+			}
+		};
+		auto emitStorageSlotsBottom = [&stream](const std::vector<StorageSlot> &storageSlots) {
+			stream << "|";
+			for (auto &storageSlot : storageSlots)
+			{
+				if (storageSlot.usesLeft == -1)
+				{
+					stream << "__C";
+				}
+				else if (storageSlot.usesLeft)
+				{
+					stream << std::setfill('_') << std::setw(3) << storageSlot.usesLeft;
+				}
+				else
+				{
+					stream << "___";
+				}
+				stream << "|";
+			}
+		};
+		while (true)
+		{
+			auto &step = plan.steps[planIndex];
+			planIndex += 1;
+			if (std::get_if<State::Commit>(&step))
+			{
+				break;
+			}
+			handleStoragePlanStep(step);
+		}
 		for (int32_t layerIndex = 1; layerIndex < int32_t(state.layers.size()) - 1; ++layerIndex)
 		{
-			auto layerBegin = state.LayerBegins(layerIndex);
-			auto layerEnd = state.LayerBegins(layerIndex + 1);
-			for (auto nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
+			auto storageSlotsCopy = storageSlots;
+			struct WorkSlotState
 			{
-				auto nodeIndex = state.nodeIndices[nodeIndicesIndex];
-				stream << std::setw(3) << nodeIndex << " ";
+				bool triggeredMode = false;
+				std::optional<int32_t> tmp;
+				std::optional<int32_t> loadedFrom;
+				std::optional<int32_t> cloadedFrom;
+				std::optional<int32_t> storedTo;
+				std::optional<int32_t> cstoredTo;
+				std::optional<int32_t> nodeIndex;
+			};
+			std::vector<WorkSlotState> workSlotStates(state.tree->workSlots);
+			while (true)
+			{
+				auto &step = plan.steps[planIndex];
+				planIndex += 1;
+				if (std::get_if<State::Commit>(&step))
+				{
+					break;
+				}
+				else if (auto *load = std::get_if<State::Load>(&step))
+				{
+					workSlotStates[load->workSlot].tmp = load->tmp;
+					workSlotStates[load->workSlot].loadedFrom = load->storageSlot;
+					workSlotStates[load->workSlot].nodeIndex = load->nodeIndex;
+				}
+				else if (auto *cload = std::get_if<State::Cload>(&step))
+				{
+					workSlotStates[cload->workSlot].tmp = cload->tmp;
+					workSlotStates[cload->workSlot].cloadedFrom = cload->storageSlot;
+					workSlotStates[cload->workSlot].nodeIndex = cload->nodeIndex;
+				}
+				else if (auto *store = std::get_if<State::Store>(&step))
+				{
+					workSlotStates[store->workSlot].storedTo = store->storageSlot;
+				}
+				else if (auto *cstore = std::get_if<State::Cstore>(&step))
+				{
+					workSlotStates[cstore->workSlot].cstoredTo = cstore->storageSlot;
+				}
+				else if (auto *mode = std::get_if<State::Mode>(&step))
+				{
+					workSlotStates[mode->workSlot].triggeredMode = true;
+				}
+				handleStoragePlanStep(step);
+			}
+			emitStorageSlotsTop(storageSlotsCopy);
+			stream << " |";
+			for (auto &workSlotState : workSlotStates)
+			{
+				if (workSlotState.nodeIndex)
+				{
+					if (workSlotState.cloadedFrom)
+					{
+						stream << std::setw(2) << *workSlotState.cloadedFrom;
+						stream << "/" << std::setw(1) << *workSlotState.tmp << ">>";
+					}
+					if (workSlotState.loadedFrom)
+					{
+						stream << std::setw(2) << *workSlotState.loadedFrom;
+						stream << "/" << std::setw(1) << *workSlotState.tmp << "->";
+					}
+					stream << std::setw(3) << state.tree->nodes[*workSlotState.nodeIndex].sources[0];
+				}
+				else
+				{
+					stream << "         ";
+				}
+				stream << "|";
 			}
 			stream << std::endl;
+			emitStorageSlotsBottom(storageSlotsCopy);
+			stream << " |" << std::setfill('0');
+			for (auto &workSlotState : workSlotStates)
+			{
+				if (workSlotState.nodeIndex)
+				{
+					if (workSlotState.triggeredMode)
+					{
+						stream << "*";
+					}
+					else
+					{
+						stream << "_";
+					}
+					if (workSlotState.cstoredTo)
+					{
+						stream << ">>" << std::setw(2) << *workSlotState.cstoredTo;
+					}
+					else
+					{
+						stream << "____";
+					}
+					if (workSlotState.storedTo)
+					{
+						stream << "->" << std::setw(2) << *workSlotState.storedTo;
+					}
+					else
+					{
+						stream << "____";
+					}
+				}
+				else
+				{
+					stream << "_________";
+				}
+				stream << "|";
+			}
+			stream << std::endl;
+			// auto layerBegin = state.LayerBegins(layerIndex);
+			// auto layerEnd = state.LayerBegins(layerIndex + 1);
+			// for (auto nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
+			// {
+			// 	auto nodeIndex = state.nodeIndices[nodeIndicesIndex];
+			// 	stream << std::setfill('0') << std::setw(3) << nodeIndex << " ";
+			// }
 		}
-		stream << "============== END STATE ==============" << std::endl;
+		emitStorageSlotsTop(storageSlots);
+		stream << std::endl;
+		emitStorageSlotsBottom(storageSlots);
+		stream << std::endl;
+		stream << std::endl;
+		stream << std::endl;
 		return stream;
 	}
 }
@@ -731,14 +1095,14 @@ int main()
 	while (temp > tempFini)
 	{
 		auto newState = state.RandomNeighbour(rng);
-		auto energyLinear = state.GetEnergy().linear;
-		auto newEnergyLinear = newState.GetEnergy().linear;
+		auto energyLinear = state.GetEnergy<State::Energy>().linear;
+		auto newEnergyLinear = newState.GetEnergy<State::Energy>().linear;
 		if (TransitionProbability(energyLinear, newEnergyLinear, temp) >= rdist(rng))
 		{
 			state = std::move(newState);
 		}
 		count += 1;
-		if (count == 10000)
+		if (count == 100000)
 		{
 			count = 0;
 			std::cerr << state;
