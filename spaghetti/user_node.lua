@@ -32,7 +32,9 @@ function user_node_i:can_be_zero()
 end
 
 function user_node_i:input_error_(name, message)
-	misc.user_error(message:format(("input %s of %s connected to %s"):format(name, tostring(self), tostring(self.params_[name]))))
+	local param_node = self.params_[name].node
+	local param_output_index = self.params_[name].output_index
+	misc.user_error(message:format(("input %s of %s connected to %s/%i"):format(name, tostring(self), tostring(param_node), param_output_index)))
 end
 
 function user_node_i:check_inputs_()
@@ -47,19 +49,19 @@ function user_node_i:check_inputs_()
 		-- self.params_.rhs is the filt value, unless self.info_.commutative, in which case either might be
 		if self.marked_zeroable_ then
 			-- at most one input may be marked zeroable
-			if self.params_.lhs.marked_zeroable_ and self.params_.rhs.marked_zeroable_ then
+			if self.params_.lhs.node.marked_zeroable_ and self.params_.rhs.node.marked_zeroable_ then
 				misc.user_error("both inputs of %s are marked zeroable", tostring(self))
 			end
 			-- if not self.info_.commutative, rhs must not be the zeroable input
-			if not self.info_.commutative and self.params_.rhs.marked_zeroable_ then
+			if not self.info_.commutative and self.params_.rhs.node.marked_zeroable_ then
 				self:input_error_("rhs", "%s is marked zeroable")
 			end
 		else
 			-- no input may be marked zeroable
-			if self.params_.lhs.marked_zeroable_ then
+			if self.params_.lhs.node.marked_zeroable_ then
 				self:input_error_("lhs", "%s is marked zeroable")
 			end
-			if self.params_.rhs.marked_zeroable_ then
+			if self.params_.rhs.node.marked_zeroable_ then
 				self:input_error_("rhs", "%s is marked zeroable")
 			end
 		end
@@ -67,22 +69,15 @@ function user_node_i:check_inputs_()
 		if self.marked_zeroable_ then
 			misc.user_error("%s marked zeroable despite being a select", tostring(self))
 		end
-		if not self.params_.cond.marked_zeroable_ then
+		if not self.params_.cond.node.marked_zeroable_ then
 			self:input_error_("cond", "%s is not marked zeroable")
 		end
-		if self.params_.vnonzero.marked_zeroable_ then
+		if self.params_.vnonzero.node.marked_zeroable_ then
 			self:input_error_("vnonzero", "%s is marked zeroable")
 		end
-		if self.params_.vzero.marked_zeroable_ then
+		if self.params_.vzero.node.marked_zeroable_ then
 			self:input_error_("vzero", "%s is marked zeroable")
 		end
-	-- elseif self.info_.method == "fallback" then
-	-- 	if not self.params_.cond.marked_zeroable_ then
-	-- 		self:input_error_("cond", "%s is not marked zeroable")
-	-- 	end
-	-- 	if self.params_.vzero.marked_zeroable_ then
-	-- 		self:input_error_("vzero", "%s is marked zeroable")
-	-- 	end
 	else
 		assert(false)
 	end
@@ -122,9 +117,11 @@ end
 
 local function make_node(typev)
 	return setmetatable({
-		type_       = typev,
-		never_zero_ = false,
-		marked_zeroable_  = false,
+		type_            = typev,
+		never_zero_      = false,
+		marked_zeroable_ = false,
+		select_group_    = false,
+		output_count_    = 1,
 	}, user_node_m)
 end
 
@@ -187,7 +184,10 @@ do
 			for i = 1, #info.params do
 				params[i] = maybe_promote_number(params[i])
 				check.mt(user_node_m, info.params[i], params[i])
-				node.params_[info.params[i]] = params[i]
+				node.params_[info.params[i]] = {
+					node         = params[i],
+					output_index = 1,
+				}
 			end
 			local keepalive, payload = info.payload(unpack(params, 1, nparams))
 			node.keepalive_  = keepalive
@@ -340,21 +340,8 @@ add_op("select", {
 	payload = function(cond, vnonzero, vzero)
 		return one_of(vnonzero, vzero)
 	end,
-	exec = function(cond, vnonzero, vzero)
-		if cond ~= 0 then
-			return vnonzero
-		end
-		return vzero
-	end,
 	method = "select",
 })
--- add_op("fallback", {
--- 	params = { "cond", "vzero" },
--- 	payload = function(cond, vzero)
--- 		return one_of(cond, vzero)
--- 	end,
--- 	method = "fallback",
--- })
 
 return strict.make_mt_one("spaghetti.user_node", {
 	maybe_promote_number_ = maybe_promote_number,

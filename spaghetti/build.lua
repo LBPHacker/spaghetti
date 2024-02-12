@@ -13,7 +13,7 @@ local function hierarchy_up(output_keys, visit)
 		if visit(expr) then
 			if expr.type_ == "composite" then
 				for _, param in pairs(expr.params_) do
-					neighbours[param] = true
+					neighbours[param.node] = true
 				end
 			end
 		end
@@ -33,8 +33,8 @@ local function ts_down(output_keys, visit)
 	hierarchy_up(output_keys, function(expr)
 		if expr.type_ == "composite" then
 			for _, parent in pairs(expr.params_) do
-				children[parent][expr] = true
-				parents[expr][parent] = true
+				children[parent.node][expr] = true
+				parents[expr][parent.node] = true
 			end
 		end
 		if expr.type_ == "input" or expr.type_ == "constant" then
@@ -150,19 +150,29 @@ local function check_info(info)
 	}
 end
 
-local function lift(output_keys, transform)
-	local lifted = {}
-	ts_down(output_keys, function(expr)
-		lifted[expr] = transform(expr, lifted)
-	end)
-	local lifted_output_keys = {}
-	for key in pairs(output_keys) do
-		lifted_output_keys[lifted[key]] = true
+local function lift(outputs, transform)
+	local output_keys = {}
+	for _, param in ipairs(outputs) do
+		output_keys[param.node] = true
 	end
-	return lifted_output_keys
+	local lifted = {}
+	local node_ids = id_store.make_id_store()
+	local function get_lifted(param)
+		return lifted[node_ids:get(param.node) .. "/" .. param.output_index]
+	end
+	ts_down(output_keys, function(expr)
+		for output_index, param in ipairs(transform(expr, get_lifted)) do
+			lifted[node_ids:get(expr) .. "/" .. output_index] = param
+		end
+	end)
+	local lifted_outputs = {}
+	for index, param in pairs(outputs) do
+		lifted_outputs[index] = get_lifted(param)
+	end
+	return lifted_outputs
 end
 
-local function fold_equivalent(output_keys)
+local function fold_equivalent(outputs)
 	local function get_constant_value(expr)
 		return bit.bor(expr.keepalive_, expr.payload_)
 	end
@@ -175,11 +185,12 @@ local function fold_equivalent(output_keys)
 		end
 		return constants[value]
 	end
-	local ids = id_store.make_id_store()
+	local node_ids = id_store.make_id_store()
+	local output_ids = id_store.make_id_store()
 	local composites = {}
 	local function get_composite(expr)
-		local lhs_id = ids:get(expr.params_.lhs)
-		local rhs_id = ids:get(expr.params_.rhs)
+		local lhs_id = output_ids:get(node_ids:get(expr.params_.lhs.node) .. "/" .. expr.params_.lhs.output_index)
+		local rhs_id = output_ids:get(node_ids:get(expr.params_.rhs.node) .. "/" .. expr.params_.rhs.output_index)
 		if expr.info_.commutative then
 			lhs_id, rhs_id = math.min(lhs_id, rhs_id), math.max(lhs_id, rhs_id)
 		end
@@ -191,7 +202,7 @@ local function fold_equivalent(output_keys)
 		end
 		return composites[composite_key]
 	end
-	return lift(output_keys, function(expr, lifted)
+	return lift(outputs, function(expr, get_lifted)
 		local new_expr = setmetatable({}, user_node.mt_)
 		for key, value in pairs(expr) do
 			new_expr[key] = value
@@ -203,9 +214,9 @@ local function fold_equivalent(output_keys)
 			local fold_to_constant = true
 			local constant_params = {}
 			for index, name in pairs(expr.info_.params) do
-				local new_param = lifted[expr.params_[name]]
-				if new_param.type_ == "constant" then
-					constant_params[index] = get_constant_value(new_param)
+				local new_param = get_lifted(expr.params_[name])
+				if new_param.node.type_ == "constant" then
+					constant_params[index] = get_constant_value(new_param.node)
 				else
 					fold_to_constant = false
 				end
@@ -220,72 +231,102 @@ local function fold_equivalent(output_keys)
 			end
 		end
 		new_expr.user_node_ = expr
-		return new_expr
+		return { {
+			node         = new_expr,
+			output_index = 1,
+		} }
 	end)
 end
 
-local function flatten_selects(output_keys)
-	return lift(output_keys, function(expr, lifted)
+local function flatten_selects(outputs)
+	local lifted_select_groups = {}
+	return lift(outputs, function(expr, get_lifted)
 		local new_expr = setmetatable({}, user_node.mt_)
 		for key, value in pairs(expr) do
 			new_expr[key] = value
 		end
+		local new_output_index = 1
 		if expr.type_ == "composite" then
 			new_expr.params_ = {}
 			if expr.info_.method == "select" then
-				local merged_info = {
-					method    = "merged_select",
-					params    = {},
-					filt_tmps = {},
-				}
-				local param_index = 0
-				local function insert(param_name, param)
-					table.insert(merged_info.params, 1, param_name)
-					new_expr.params_[param_name] = param
-				end
-				local function insert_stage(param, filt_tmp)
-					param_index = param_index + 1
-					local param_name = "stage_" .. tostring(param_index)
-					table.insert(merged_info.filt_tmps, 1, filt_tmp)
-					insert(param_name, param)
-				end
-				local cond = lifted[expr.params_.cond]
-				assert(cond.marked_zeroable_, "cond not marked zeroable")
-				local curr = cond
-				while curr.params_.rhs.marked_zeroable_ or curr.params_.lhs.marked_zeroable_ do
-					assert(not (curr.params_.rhs.marked_zeroable_ and curr.params_.lhs.marked_zeroable_), "both rhs and lhs are marked zeroable")
-					local function check(param, other)
-						if curr.params_[param].marked_zeroable_ then
-							curr = curr.params_[param]
-							insert_stage(curr.params_[other], curr.info_.filt_tmp)
-						end
+				local select_group = expr.select_group_ or { expr }
+				if not lifted_select_groups[select_group] then
+					local merged_info = {
+						method    = "flat_select",
+						params    = {},
+						filt_tmps = {},
+					}
+					local param_index = 0
+					local function insert(at, param_name, param)
+						table.insert(merged_info.params, at, param_name)
+						new_expr.params_[param_name] = param
 					end
-					check("rhs", "lhs")
-					check("lhs", "rhs")
+					local function insert_stage(param, filt_tmp)
+						param_index = param_index + 1
+						local param_name = "stage_" .. tostring(param_index)
+						table.insert(merged_info.filt_tmps, 1, filt_tmp)
+						insert(1, param_name, param)
+					end
+					local cond = get_lifted(expr.params_.cond)
+					assert(cond.node.marked_zeroable_, "cond not marked zeroable")
+					local curr = cond
+					while curr.node.params_.rhs.node.marked_zeroable_ or curr.node.params_.lhs.node.marked_zeroable_ do
+						assert(not (curr.node.params_.rhs.node.marked_zeroable_ and curr.node.params_.lhs.node.marked_zeroable_), "both rhs and lhs are marked zeroable")
+						local function check(param, other)
+							if curr.node.params_[param].node.marked_zeroable_ then
+								curr = curr.node.params_[param]
+								insert_stage(curr.node.params_[other], curr.node.info_.filt_tmp)
+							end
+						end
+						check("rhs", "lhs")
+						check("lhs", "rhs")
+					end
+					insert_stage(curr.node.params_.lhs, curr.node.info_.filt_tmp)
+					insert_stage(curr.node.params_.rhs, 0) -- rhs comes first
+					merged_info.stages = #merged_info.params
+					new_expr.info_ = merged_info
+					merged_info.lanes = 0
+					new_expr.output_count_ = 0
+					local function add_lane(lane_expr)
+						merged_info.lanes = merged_info.lanes + 1
+						new_expr.output_count_ = new_expr.output_count_ + 1
+						insert(merged_info.lanes * 2 - 1, ("lane_%i_vzero"):format(merged_info.lanes), get_lifted(lane_expr.params_.vzero))
+						insert(merged_info.lanes * 2 - 1, ("lane_%i_vnonzero"):format(merged_info.lanes), get_lifted(lane_expr.params_.vnonzero))
+						return new_expr.output_count_
+					end
+					lifted_select_groups[select_group] = {
+						expr     = new_expr,
+						add_lane = add_lane,
+					}
 				end
-				insert_stage(curr.params_.lhs, curr.info_.filt_tmp)
-				insert_stage(curr.params_.rhs, 0)
-				merged_info.stages = #merged_info.params
-				merged_info.lanes = 1
-				insert("lane_1_vnonzero", lifted[expr.params_.vnonzero])
-				insert("lane_1_vzero", lifted[expr.params_.vzero])
-				new_expr.info_ = merged_info
+				local lifted_select_group = lifted_select_groups[select_group]
+				new_expr = lifted_select_group.expr
+				new_output_index = lifted_select_group.add_lane(expr)
 			else
 				for index, name in pairs(expr.info_.params) do
-					local new_param = lifted[expr.params_[name]]
-					new_expr.params_[name] = new_param
+					new_expr.params_[name] = get_lifted(expr.params_[name])
 				end
 			end
 		end
-		new_expr.user_node_ = expr
-		return new_expr
+		new_expr.user_node_ = expr.user_node_
+		return { {
+			node         = new_expr,
+			output_index = new_output_index,
+		} }
 	end)
 end
 
 local function preprocess_tree(output_keys)
-	output_keys = fold_equivalent(output_keys)
-	output_keys = flatten_selects(output_keys)
-	return output_keys
+	local outputs = {}
+	for key in pairs(output_keys) do
+		table.insert(outputs, {
+			node         = key,
+			output_index = 1,
+		})
+	end
+	outputs = fold_equivalent(outputs)
+	outputs = flatten_selects(outputs)
+	return outputs
 end
 
 local storage_slot_overhead_penalty = 10
@@ -296,17 +337,17 @@ local mode_cost                     =  2
 local store_cost                    =  2
 local cstore_cost                   =  1
 
-local function construct_layout(stacks, storage_slots, max_work_slots, output_keys, on_progress)
-	local outputs = 0
+local function construct_layout(stacks, storage_slots, max_work_slots, outputs, on_progress)
+	local output_keys = {}
+	for _, param in ipairs(outputs) do
+		output_keys[param.node] = true
+	end
 	local filt_tmps = {}
 	hierarchy_up(output_keys, function(expr)
 		if expr.type_ == "composite" then
 			if expr.info_.method == "filt_tmp" then
 				filt_tmps[expr.info_.filt_tmp] = expr.info_
 			end
-		end
-		if output_keys[expr] then
-			outputs = outputs + 1
 		end
 		return true
 	end)
@@ -317,7 +358,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, output_ke
 	ts_down(output_keys, function(expr)
 		table.insert(index_to_expr, {
 			index = #index_to_expr + 1,
-			expr = expr,
+			expr  = expr,
 		})
 		if expr.type_ == "constant" then
 			table.insert(constants, expr)
@@ -340,9 +381,17 @@ local function construct_layout(stacks, storage_slots, max_work_slots, output_ke
 		end
 		return lhs.index < rhs.index
 	end)
-	local expr_to_index = {}
-	for key, value in pairs(index_to_expr) do
-		expr_to_index[value.expr] = key
+	local param_to_index
+	do
+		local expr_to_index = {}
+		local index = 1
+		for _, value in ipairs(index_to_expr) do
+			expr_to_index[value.expr] = index
+			index = index + value.expr.output_count_
+		end
+		function param_to_index(param)
+			return expr_to_index[param.node] + param.output_index - 2
+		end
 	end
 	local index_to_filt_tmp = {}
 	local filt_tmp_to_index = {}
@@ -364,15 +413,18 @@ local function construct_layout(stacks, storage_slots, max_work_slots, output_ke
 		store_cost,
 		cstore_cost
 	))
-	io.stdout:write(("%i %i %i %i\n"):format(#constants, #inputs, #composites, outputs))
-	for i = 1, #index_to_expr do
-		local expr = index_to_expr[i].expr
+	io.stdout:write(("%i %i %i %i\n"):format(#constants, #inputs, #composites, #outputs))
+	for _, item in ipairs(index_to_expr) do
+		local expr = item.expr
 		if expr.type_ == "composite" then
+			local function get_expr_index(param_index)
+				return param_to_index(expr.params_[expr.info_.params[param_index]])
+			end
 			if expr.info_.method == "filt_tmp" then
 				io.stdout:write(("%i %i %i\n"):format(
 					filt_tmp_to_index[expr.info_.filt_tmp] - 1,
-					expr_to_index[expr.params_.rhs] - 1,
-					expr_to_index[expr.params_.lhs] - 1
+					get_expr_index(2), -- rhs comes first
+					get_expr_index(1)
 				))
 			else
 				io.stdout:write(("%i %i %i"):format(
@@ -380,9 +432,6 @@ local function construct_layout(stacks, storage_slots, max_work_slots, output_ke
 					expr.info_.lanes,
 					expr.info_.stages
 				))
-				local function get_expr_index(param_index)
-					return expr_to_index[expr.params_[expr.info_.params[param_index]]] - 1
-				end
 				for j = 1, expr.info_.lanes do
 					io.stdout:write((" %i %i"):format(
 						get_expr_index(j * 2 - 1),
@@ -399,8 +448,8 @@ local function construct_layout(stacks, storage_slots, max_work_slots, output_ke
 			end
 		end
 	end
-	for expr in pairs(output_keys) do
-		io.stdout:write(("%i "):format(expr_to_index[expr] - 1))
+	for _, param in ipairs(outputs) do
+		io.stdout:write(("%i "):format(param_to_index(param)))
 	end
 	io.stdout:write("\n")
 end
@@ -410,8 +459,8 @@ local function build(info)
 		info = check_info(info)
 		check_zeroness(info.output_keys)
 		check_connectivity(info.output_keys, info.inputs)
-		local output_keys = preprocess_tree(info.output_keys)
-		construct_layout(info.stacks, info.storage_slots, info.work_slots, output_keys, info.on_progress)
+		local outputs = preprocess_tree(info.output_keys)
+		construct_layout(info.stacks, info.storage_slots, info.work_slots, outputs, info.on_progress)
 	end)
 end
 
