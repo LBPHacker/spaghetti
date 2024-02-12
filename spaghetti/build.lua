@@ -224,8 +224,67 @@ local function fold_equivalent(output_keys)
 	end)
 end
 
+local function flatten_selects(output_keys)
+	return lift(output_keys, function(expr, lifted)
+		local new_expr = setmetatable({}, user_node.mt_)
+		for key, value in pairs(expr) do
+			new_expr[key] = value
+		end
+		if expr.type_ == "composite" then
+			new_expr.params_ = {}
+			if expr.info_.method == "select" then
+				local merged_info = {
+					method    = "merged_select",
+					params    = {},
+					filt_tmps = {},
+				}
+				local param_index = 0
+				local function insert(param_name, param)
+					table.insert(merged_info.params, 1, param_name)
+					new_expr.params_[param_name] = param
+				end
+				local function insert_stage(param, filt_tmp)
+					param_index = param_index + 1
+					local param_name = "stage_" .. tostring(param_index)
+					table.insert(merged_info.filt_tmps, 1, filt_tmp)
+					insert(param_name, param)
+				end
+				local cond = lifted[expr.params_.cond]
+				assert(cond.marked_zeroable_, "cond not marked zeroable")
+				local curr = cond
+				while curr.params_.rhs.marked_zeroable_ or curr.params_.lhs.marked_zeroable_ do
+					assert(not (curr.params_.rhs.marked_zeroable_ and curr.params_.lhs.marked_zeroable_), "both rhs and lhs are marked zeroable")
+					local function check(param, other)
+						if curr.params_[param].marked_zeroable_ then
+							curr = curr.params_[param]
+							insert_stage(curr.params_[other], curr.info_.filt_tmp)
+						end
+					end
+					check("rhs", "lhs")
+					check("lhs", "rhs")
+				end
+				insert_stage(curr.params_.lhs, curr.info_.filt_tmp)
+				insert_stage(curr.params_.rhs, 0)
+				merged_info.stages = #merged_info.params
+				merged_info.lanes = 1
+				insert("lane_1_vnonzero", lifted[expr.params_.vnonzero])
+				insert("lane_1_vzero", lifted[expr.params_.vzero])
+				new_expr.info_ = merged_info
+			else
+				for index, name in pairs(expr.info_.params) do
+					local new_param = lifted[expr.params_[name]]
+					new_expr.params_[name] = new_param
+				end
+			end
+		end
+		new_expr.user_node_ = expr
+		return new_expr
+	end)
+end
+
 local function preprocess_tree(output_keys)
 	output_keys = fold_equivalent(output_keys)
+	output_keys = flatten_selects(output_keys)
 	return output_keys
 end
 
@@ -316,17 +375,27 @@ local function construct_layout(stacks, storage_slots, max_work_slots, output_ke
 					expr_to_index[expr.params_.lhs] - 1
 				))
 			else
-				local cond = expr.params_.cond
-				assert(cond.marked_zeroable_, "cond not marked zeroable")
-				assert(not cond.params_.rhs.marked_zeroable_, "cond.rhs marked zeroable")
-				assert(not cond.params_.lhs.marked_zeroable_, "cond.lhs marked zeroable")
-				io.stdout:write(("%i 1 2 %i %i %i %i %i\n"):format(
-					#index_to_filt_tmp, expr_to_index[expr.params_.vnonzero] - 1,
-					expr_to_index[expr.params_.vzero] - 1,
-					expr_to_index[cond.params_.rhs] - 1,
-					filt_tmp_to_index[cond.info_.filt_tmp] - 1,
-					expr_to_index[cond.params_.lhs] - 1
+				io.stdout:write(("%i %i %i"):format(
+					#index_to_filt_tmp,
+					expr.info_.lanes,
+					expr.info_.stages
 				))
+				local function get_expr_index(param_index)
+					return expr_to_index[expr.params_[expr.info_.params[param_index]]] - 1
+				end
+				for j = 1, expr.info_.lanes do
+					io.stdout:write((" %i %i"):format(
+						get_expr_index(j * 2 - 1),
+						get_expr_index(j * 2)
+					))
+				end
+				for j = 1, expr.info_.stages do
+					if j > 1 then
+						io.stdout:write((" %i"):format(filt_tmp_to_index[expr.info_.filt_tmps[j]] - 1))
+					end
+					io.stdout:write((" %i"):format(get_expr_index(expr.info_.lanes * 2 + j)))
+				end
+				io.stdout:write("\n")
 			end
 		end
 	end

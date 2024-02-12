@@ -736,12 +736,12 @@ int main()
 		if (TransitionProbability(energyLinear, newEnergyLinear, temp) >= rdist(rng))
 		{
 			state = std::move(newState);
-			count += 1;
-			if (count == 10000)
-			{
-				count = 0;
-				std::cerr << state;
-			}
+		}
+		count += 1;
+		if (count == 10000)
+		{
+			count = 0;
+			std::cerr << state;
 		}
 		temp -= tempLoss;
 		// temp *= tempLoss;
