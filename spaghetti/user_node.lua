@@ -211,6 +211,9 @@ add_op("band", {
 		local payload = bit.band(lhs.payload_, rhs.payload_)
 		return keepalive, payload
 	end,
+	exec = function(lhs, rhs)
+		return bit.band(lhs, rhs)
+	end,
 	method = "filt_tmp",
 	filt_tmp = 1,
 	commutative = true,
@@ -221,6 +224,9 @@ add_op("bor", {
 		local keepalive = bit.bor(lhs.keepalive_, rhs.keepalive_)
 		local payload = bit.band(bit.bor(lhs.payload_, rhs.payload_), bit.bxor(keepalive, check.ctype_bits))
 		return keepalive, payload
+	end,
+	exec = function(lhs, rhs)
+		return bit.bor(lhs, rhs)
 	end,
 	method = "filt_tmp",
 	filt_tmp = 2,
@@ -233,6 +239,9 @@ add_op("bsub", {
 		local payload = bit.band(lhs.payload_, bit.bxor(rhs.payload_, check.ctype_bits))
 		return keepalive, payload
 	end,
+	exec = function(lhs, rhs)
+		return bit.band(lhs, bit.bxor(rhs, check.ctype_bits))
+	end,
 	method = "filt_tmp",
 	filt_tmp = 3,
 	commutative = false,
@@ -244,6 +253,9 @@ add_op("bxor", {
 		local payload = bit.bor(lhs.payload_, rhs.payload_)
 		return keepalive, payload
 	end,
+	exec = function(lhs, rhs)
+		return bit.bxor(lhs, rhs)
+	end,
 	method = "filt_tmp",
 	filt_tmp = 7,
 	commutative = true,
@@ -252,6 +264,15 @@ local function one_of(lhs, rhs)
 	local keepalive = bit.band(lhs.keepalive_, rhs.keepalive_)
 	local payload = bit.bor(lhs.payload_, rhs.payload_, bit.bxor(lhs.keepalive_, rhs.keepalive_))
 	return keepalive, payload
+end
+local function get_shift(value)
+	local shift = 0
+	for i = 0, 29 do
+		if bit.band(bit.lshift(1, i), value) ~= 0 then
+			return i
+		end
+	end
+	return shift
 end
 local function get_shifts(rhs)
 	local last = 29
@@ -295,6 +316,9 @@ add_op("lshift", {
 	payload = function(lhs, rhs)
 		return do_shifts(lhs, rhs, bit.lshift)
 	end,
+	exec = function(lhs, rhs)
+		return bit.band(bit.lshift(lhs, get_shift(rhs)), check.ctype_bits)
+	end,
 	method = "filt_tmp",
 	filt_tmp = 10,
 	commutative = false,
@@ -304,6 +328,9 @@ add_op("rshift", {
 	payload = function(lhs, rhs)
 		return do_shifts(lhs, rhs, bit.rshift)
 	end,
+	exec = function(lhs, rhs)
+		return bit.band(bit.rshift(lhs, get_shift(rhs)), check.ctype_bits)
+	end,
 	method = "filt_tmp",
 	filt_tmp = 11,
 	commutative = false,
@@ -312,6 +339,12 @@ add_op("select", {
 	params = { "cond", "vnonzero", "vzero" },
 	payload = function(cond, vnonzero, vzero)
 		return one_of(vnonzero, vzero)
+	end,
+	exec = function(cond, vnonzero, vzero)
+		if cond ~= 0 then
+			return vnonzero
+		end
+		return vzero
 	end,
 	method = "select",
 })
@@ -326,6 +359,7 @@ add_op("select", {
 return strict.make_mt_one("spaghetti.user_node", {
 	maybe_promote_number_ = maybe_promote_number,
 	make_constant         = make_constant,
+	make_constant_        = make_constant_,
 	make_input            = make_input,
 	mt_                   = user_node_m,
 	opnames_              = opnames,

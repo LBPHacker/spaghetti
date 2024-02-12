@@ -21,6 +21,33 @@ local function hierarchy_up(output_keys, visit)
 	end)
 end
 
+local function ts_down(output_keys, visit)
+	local children = {}
+	local parents = {}
+	local initial = {}
+	hierarchy_up(output_keys, function(expr)
+		children[expr] = {}
+		parents[expr] = {}
+		return true
+	end)
+	hierarchy_up(output_keys, function(expr)
+		if expr.type_ == "composite" then
+			for _, parent in pairs(expr.params_) do
+				children[parent][expr] = true
+				parents[expr][parent] = true
+			end
+		end
+		if expr.type_ == "input" or expr.type_ == "constant" then
+			initial[expr] = true
+		end
+		return true
+	end)
+	graph.ts(initial, children, parents, function(expr)
+		visit(expr)
+		return true
+	end)
+end
+
 local function check_zeroness(output_keys)
 	hierarchy_up(output_keys, function(expr)
 		if expr.type_ == "composite" then
@@ -123,10 +150,62 @@ local function check_info(info)
 	}
 end
 
+local function lift(output_keys, transform)
+	local lifted = {}
+	ts_down(output_keys, function(expr)
+		lifted[expr] = transform(expr, lifted)
+	end)
+	local lifted_output_keys = {}
+	for key in pairs(output_keys) do
+		lifted_output_keys[lifted[key]] = true
+	end
+	return lifted_output_keys
+end
+
+local function fold_equivalent(output_keys)
+	local function get_constant_value(expr)
+		return bit.bor(expr.keepalive_, expr.payload_)
+	end
+	local constants = {}
+	local function get_constant(value)
+		if not constants[value] then
+			local constant = user_node.make_constant_(value)
+			constant.label_ = ("%08X"):format(value)
+			constants[value] = constant
+		end
+		return constants[value]
+	end
+	return lift(output_keys, function(expr, lifted)
+		local new_expr = setmetatable({}, user_node.mt_)
+		for key, value in pairs(expr) do
+			new_expr[key] = value
+		end
+		if expr.type_ == "constant" then
+			new_expr = get_constant(get_constant_value(expr))
+		elseif expr.type_ == "composite" then
+			new_expr.params_ = {}
+			local fold_to_constant = true
+			local constant_params = {}
+			for index, name in pairs(expr.info_.params) do
+				local new_param = lifted[expr.params_[name]]
+				if new_param.type_ == "constant" then
+					constant_params[index] = get_constant_value(new_param)
+				else
+					fold_to_constant = false
+				end
+				new_expr.params_[name] = new_param
+			end
+			if fold_to_constant and expr.info_.method == "filt_tmp" then
+				new_expr = get_constant(new_expr.info_.exec(unpack(constant_params)))
+			end
+		end
+		new_expr.user_node_ = expr
+		return new_expr
+	end)
+end
+
 local function preprocess_tree(output_keys)
-	-- TODO: lift from user nodes to internal nodes
-	-- TODO: constant folding
-	-- TODO: basic equivalence folding
+	output_keys = fold_equivalent(output_keys)
 	return output_keys
 end
 
@@ -139,26 +218,10 @@ local store_cost                    =  2
 local cstore_cost                   =  1
 
 local function construct_layout(stacks, storage_slots, max_work_slots, output_keys, on_progress)
-	local children = {}
-	local parents = {}
-	local initial = {}
-	hierarchy_up(output_keys, function(expr)
-		children[expr] = {}
-		parents[expr] = {}
-		return true
-	end)
 	local outputs = 0
 	local filt_tmps = {}
 	hierarchy_up(output_keys, function(expr)
 		if expr.type_ == "composite" then
-			for _, parent in pairs(expr.params_) do
-				children[parent][expr] = true
-				parents[expr][parent] = true
-			end
-		end
-		if expr.type_ == "input" or expr.type_ == "constant" then
-			initial[expr] = true
-		else
 			if expr.info_.method == "filt_tmp" then
 				filt_tmps[expr.info_.filt_tmp] = expr.info_
 			end
@@ -172,7 +235,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, output_ke
 	local inputs = {}
 	local composites = {}
 	local index_to_expr = {}
-	graph.ts(initial, children, parents, function(expr)
+	ts_down(output_keys, function(expr)
 		table.insert(index_to_expr, {
 			index = #index_to_expr + 1,
 			expr = expr,
@@ -225,11 +288,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, output_ke
 	io.stdout:write(("%i %i %i %i\n"):format(#constants, #inputs, #composites, outputs))
 	for i = 1, #index_to_expr do
 		local expr = index_to_expr[i].expr
-		if expr.type_ == "constant" then
-			-- nothing
-		elseif expr.type_ == "input" then
-			-- nothing
-		else
+		if expr.type_ == "composite" then
 			if expr.info_.method == "filt_tmp" then
 				io.stdout:write(("%i %i %i\n"):format(
 					filt_tmp_to_index[expr.info_.filt_tmp] - 1,
