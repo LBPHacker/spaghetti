@@ -537,21 +537,20 @@ namespace
 			}
 			for (int32_t layerIndex = 1; layerIndex < int32_t(layers.size()) - 1; ++layerIndex)
 			{
-				auto doStore = [this, &energy, &allocStorage](int32_t workSlotIndex, int32_t sourceIndex) {
-					auto storageSlotIndex = allocStorage(sourceIndex, false);
-					energy.partCount += tree->storeCost;
-					if constexpr (std::is_same_v<EnergyType, Plan>)
-					{
-						energy.steps.push_back(Store{ workSlotIndex, storageSlotIndex });
-					}
-					return storageSlotIndex;
+				struct StoreScheduleEntry
+				{
+					int32_t sourceIndex;
+					int32_t workSlotIndex;
+					std::optional<int32_t> cworkSlotIndex;
 				};
-				auto doCstore = [this, &energy](int32_t workSlotIndex, int32_t sourceIndex, int32_t storageSlotIndex) {
-					energy.partCount += tree->cstoreCost;
-					if constexpr (std::is_same_v<EnergyType, Plan>)
-					{
-						energy.steps.push_back(Cstore{ workSlotIndex, storageSlotIndex });
-					}
+				std::vector<StoreScheduleEntry> storeSchedule;
+				auto doStore = [&storeSchedule](int32_t workSlotIndex, int32_t sourceIndex) {
+					auto storeScheduleIndex = int32_t(storeSchedule.size());
+					storeSchedule.push_back({ sourceIndex, workSlotIndex });
+					return storeScheduleIndex;
+				};
+				auto doCstore = [&storeSchedule](int32_t workSlotIndex, int32_t storeScheduleIndex) {
+					storeSchedule[storeScheduleIndex].cworkSlotIndex = workSlotIndex;
 				};
 				struct TmpLoad
 				{
@@ -591,12 +590,12 @@ namespace
 				auto layerBegin = LayerBegins(layerIndex);
 				auto layerEnd = LayerBegins(layerIndex + 1);
 				int32_t workSlotsUsed = 0;
-				std::vector<int32_t> selectStorageSlotIndices;
+				std::vector<int32_t> selectStorageSlotSchedule;
 				{
 					auto &lastNode = tree->nodes[nodeIndices[layerEnd - 1]];
 					if (lastNode.type == Node::select)
 					{
-						selectStorageSlotIndices.resize(lastNode.sources.size(), -1);
+						selectStorageSlotSchedule.resize(lastNode.sources.size(), -1);
 					}
 				}
 				for (int32_t nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
@@ -612,7 +611,7 @@ namespace
 						this,
 						nodeIndex,
 						&energy,
-						&selectStorageSlotIndices,
+						&selectStorageSlotSchedule,
 						&nodeIndexToLayerIndex,
 						&workSlotsUsed,
 						&doLoad,
@@ -643,7 +642,7 @@ namespace
 							if (link.type == Link::toSelectZero)
 							{
 								auto [ laneIndex, sourceIndex ] = toSelectZeroLinkToSourceIndex(link);
-								selectStorageSlotIndices[laneIndex] = doStore(workSlotsUsed - 1, sourceIndex);
+								selectStorageSlotSchedule[laneIndex] = doStore(workSlotsUsed - 1, sourceIndex);
 							}
 						}
 					};
@@ -662,7 +661,7 @@ namespace
 						for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
 						{
 							doLinkUpstream(laneIndex * 2);
-							doCstore(workSlotsUsed - 1, node.sources[laneIndex], selectStorageSlotIndices[laneIndex]);
+							doCstore(workSlotsUsed - 1, selectStorageSlotSchedule[laneIndex]);
 						};
 					}
 					else
@@ -683,12 +682,29 @@ namespace
 							if (nodeIndexToLayerIndex[linkedNodeIndex] == layerIndex && link.type == Link::toSelectZero)
 							{
 								auto [ laneIndex, sourceIndex ] = toSelectZeroLinkToSourceIndex(link);
-								selectStorageSlotIndices[laneIndex] = doStore(workSlotsUsed - 1, sourceIndex);
+								selectStorageSlotSchedule[laneIndex] = doStore(workSlotsUsed - 1, sourceIndex);
 							}
 						}
 						if (needsStore)
 						{
 							doStore(workSlotsUsed - 1, node.sources[0]);
+						}
+					}
+				}
+				for (auto &storeScheduleEntry : storeSchedule)
+				{
+					auto storageSlotIndex = allocStorage(storeScheduleEntry.sourceIndex, false);
+					energy.partCount += tree->storeCost;
+					if constexpr (std::is_same_v<EnergyType, Plan>)
+					{
+						energy.steps.push_back(Store{ storeScheduleEntry.workSlotIndex, storageSlotIndex });
+					}
+					if (storeScheduleEntry.cworkSlotIndex)
+					{
+						energy.partCount += tree->cstoreCost;
+						if constexpr (std::is_same_v<EnergyType, Plan>)
+						{
+							energy.steps.push_back(Cstore{ *storeScheduleEntry.cworkSlotIndex, storageSlotIndex });
 						}
 					}
 				}
@@ -872,10 +888,17 @@ namespace
 		stream << std::setfill('0');
 		auto plan = state.GetEnergy<State::Plan>();
 		stream << " >>> successful transitions: " << state.iteration << std::endl;
-		stream << " >>>     storage slot count: " << plan.storageSlotCount << std::endl;
+		stream << " >>>     storage slot count: " << plan.storageSlotCount;
+		auto showStorageSlots = state.tree->storageSlots;
+		if (plan.storageSlotCount > state.tree->storageSlots)
+		{
+			showStorageSlots = plan.storageSlotCount;
+			stream << " (above the desired " << state.tree->storageSlots << ")";
+		}
+		stream << std::endl;
 		stream << " >>>         particle count: " << plan.partCount << std::endl;
 		stream << " ";
-		for (int32_t columnIndex = 0; columnIndex < state.tree->storageSlots; ++columnIndex)
+		for (int32_t columnIndex = 0; columnIndex < showStorageSlots; ++columnIndex)
 		{
 			stream << "___ ";
 		}
@@ -891,7 +914,7 @@ namespace
 			int32_t sourceIndex;
 			int32_t usesLeft;
 		};
-		std::vector<StorageSlot> storageSlots(state.tree->storageSlots);
+		std::vector<StorageSlot> storageSlots(showStorageSlots);
 		auto handleStoragePlanStep = [&storageSlots](State::PlanStep &step) {
 			if (auto *allocStorage = std::get_if<State::AllocStorage>(&step))
 			{
