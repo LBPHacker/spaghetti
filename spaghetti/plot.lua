@@ -65,14 +65,14 @@ local particle_macros = {
 	[ "cstore" ] = function(ctx, stack, from, to)
 		return {
 			--          p3 ld fi
-			{ type = pt.LDTC, x = stack * 3, tmp = 1, life = from * 2 + 2 + stack * 3 },
+			{ type = pt.LDTC, x = stack * 3, tmp = 1, life = from * 2 + 3 + stack * 3 },
 			--          p3    fi
 		}
 	end,
 	[ "store" ] = function(ctx, stack, from, to)
 		return {
 			--          p3 ld fi
-			{ type = pt.LDTC, x = stack * 3, tmp = 1, life = from * 2 + 2 + stack * 3 },
+			{ type = pt.LDTC, x = stack * 3, tmp = 1, life = from * 2 + 3 + stack * 3 },
 			--          p3 dr fi
 			{ type = pt.DRAY, x = stack * 3, tmp = 1, tmp2 = to - 2 + (ctx.STACKS - stack) * 3 },
 			--          p3    fi
@@ -96,7 +96,7 @@ local particle_macros = {
 	[ "clear" ] = function(ctx, stack)
 		return {
 			--          fi cr p3
-			{ type = pt.CRAY, x = stack * 3, ctype = pt.SPRK, tmp2 = stack * 3 - 3 },
+			{ type = pt.CRAY, x = stack * 3, ctype = pt.SPRK, tmp2 = stack * 3 },
 			--          fi    p3
 		}
 	end,

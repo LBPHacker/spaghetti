@@ -286,8 +286,8 @@ local function flatten_selects(outputs)
 						check("rhs", "lhs")
 						check("lhs", "rhs")
 					end
-					insert_stage(curr.node.params_.lhs, curr.node.info_.filt_tmp)
-					insert_stage(curr.node.params_.rhs, 0) -- rhs comes first
+					insert_stage(curr.node.params_.rhs, curr.node.info_.filt_tmp)
+					insert_stage(curr.node.params_.lhs, 0)
 					merged_info.stages = #merged_info.params
 					new_expr.info_ = merged_info
 					merged_info.lanes = 0
@@ -433,8 +433,8 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 		if expr.info_.method == "filt_tmp" then
 			io.stdout:write(("%i %i %i\n"):format(
 				filt_tmp_to_index[expr.info_.filt_tmp] - 1,
-				get_expr_index(2), -- rhs comes first
-				get_expr_index(1)
+				get_expr_index(1),
+				get_expr_index(2)
 			))
 		else
 			io.stdout:write(("%i %i %i"):format(

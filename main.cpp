@@ -216,7 +216,6 @@ namespace
 		std::vector<Step> steps;
 		int32_t cost = 0;
 		int32_t stackCount;
-		std::vector<int32_t> tmps;
 
 		static constexpr auto commitCost = Aray::cost + East::cost + West::cost + Clear::cost;
 	};
@@ -572,7 +571,7 @@ namespace
 
 			struct Cstore : public StepBase
 			{
-				static constexpr int32_t layerOrder = 2;
+				static constexpr int32_t layerOrder = 1;
 				int32_t workSlot;
 				int32_t storageSlot;
 			};
@@ -630,31 +629,51 @@ namespace
 					{
 						return lhsLayerOrder < rhsLayerOrder;
 					}
-					// at this point only order among Mode, Load, and Cload needs to be established
-					auto tmpOrder = [](auto &step) -> std::pair<int32_t, int32_t> {
-						if (auto *load = std::get_if<EnergyWithPlan::Load>(&step))
-						{
-							return { load->tmp, 1 };
-						}
-						else if (auto *cload = std::get_if<EnergyWithPlan::Cload>(&step))
-						{
-							return { cload->tmp, 2 };
-						}
-						else if (auto *mode = std::get_if<EnergyWithPlan::Mode>(&step))
-						{
-							return { mode->tmp, 0 };
-						}
-						return { -1, -1 };
-					};
-					auto [ lhsTmp, lhsTmpOrder ] = tmpOrder(lhs);
-					auto [ rhsTmp, rhsTmpOrder ] = tmpOrder(rhs);
-					if (lhsTmp != rhsTmp)
+					if (lhsLayerOrder == Load::layerOrder)
 					{
-						return lhsTmp > rhsTmp;
+						// at this point only order among Mode, Load, and Cload needs to be established
+						auto order = [](auto &step) -> std::tuple<int32_t, int32_t, int32_t, int32_t> {
+							if (auto *load = std::get_if<EnergyWithPlan::Load>(&step))
+							{
+								return { -load->tmp, 1, load->storageSlot, 0 };
+							}
+							else if (auto *cload = std::get_if<EnergyWithPlan::Cload>(&step))
+							{
+								return { -cload->tmp, 1, cload->storageSlot, 1 };
+							}
+							else if (auto *mode = std::get_if<EnergyWithPlan::Mode>(&step))
+							{
+								return { -mode->tmp, 0, -1, -1 };
+							}
+							return { -1, -1, -1, -1 };
+						};
+						auto lhsOrder = order(lhs);
+						auto rhsOrder = order(rhs);
+						if (lhsOrder != rhsOrder)
+						{
+							return lhsOrder < rhsOrder;
+						}
 					}
-					if (lhsTmpOrder != rhsTmpOrder)
+					if (lhsLayerOrder == Store::layerOrder)
 					{
-						return lhsTmpOrder < rhsTmpOrder;
+						// at this point only order among Store and Cstore needs to be established
+						auto order = [](auto &step) -> std::tuple<int32_t, int32_t> {
+							if (auto *store = std::get_if<EnergyWithPlan::Store>(&step))
+							{
+								return { store->storageSlot, 1 };
+							}
+							else if (auto *cstore = std::get_if<EnergyWithPlan::Cstore>(&step))
+							{
+								return { cstore->storageSlot, 0 };
+							}
+							return { -1, -1 };
+						};
+						auto lhsOrder = order(lhs);
+						auto rhsOrder = order(rhs);
+						if (lhsOrder != rhsOrder)
+						{
+							return lhsOrder < rhsOrder;
+						}
 					}
 					return false;
 				});
@@ -670,10 +689,6 @@ namespace
 				constexpr auto    bottomTopCost      = Plan::Bottom::cost + Plan::Top::cost;
 				constexpr auto    stackLayersMaxCost = stackMaxCost - bottomTopCost;
 				Plan plan;
-				for (auto &tmp : tree->tmps)
-				{
-					plan.tmps.push_back(tmp.value);
-				}
 				int32_t lsnsLife3Index = -1;
 				std::vector<int32_t> constantValue(tree->storageSlots, 0);
 				for (auto &step : steps)
@@ -716,10 +731,12 @@ namespace
 					pushToBuffer(layerBuffer, step);
 				};
 				auto layerOpen = false;
-				auto flushLayer = [&stackIndex, &layerOpen, &pushToLayer, &stackBuffer, &layerBuffer, &flushStack]() {
+				auto beganStore = false;
+				auto flushLayer = [&stackIndex, &beganStore, &layerOpen, &pushToLayer, &stackBuffer, &layerBuffer, &flushStack]() {
 					if (layerOpen)
 					{
 						layerOpen = false;
+						beganStore = false;
 						pushToLayer(Plan::West{ stackIndex });
 						pushToLayer(Plan::Clear{ stackIndex });
 						assert(layerBuffer.cost <= stackLayersMaxCost);
@@ -736,6 +753,13 @@ namespace
 					if (!layerOpen)
 					{
 						layerOpen = true;
+					}
+				};
+				auto beginStore = [&beganStore, &stackIndex, &beginLayer, &pushToLayer]() {
+					beginLayer();
+					if (!beganStore)
+					{
+						beganStore = true;
 						pushToLayer(Plan::Aray{ stackIndex });
 						pushToLayer(Plan::East{ stackIndex });
 					}
@@ -766,12 +790,12 @@ namespace
 					}
 					else if (auto *store = std::get_if<Store>(&step))
 					{
-						beginLayer();
+						beginStore();
 						pushToLayer(Plan::Store{ stackIndex, store->workSlot, store->storageSlot });
 					}
 					else if (auto *cstore = std::get_if<Cstore>(&step))
 					{
-						beginLayer();
+						beginStore();
 						pushToLayer(Plan::Cstore{ stackIndex, cstore->workSlot, cstore->storageSlot });
 					}
 					else if (auto *mode = std::get_if<Mode>(&step))
@@ -897,13 +921,33 @@ namespace
 					std::optional<int32_t> cworkSlotIndex;
 				};
 				std::vector<StoreScheduleEntry> storeSchedule;
+				// auto doStore = [&storeSchedule](int32_t workSlotIndex, int32_t sourceIndex) {
+				// 	auto storeScheduleIndex = int32_t(storeSchedule.size());
+				// 	storeSchedule.push_back({ sourceIndex, workSlotIndex });
+				// 	return storeScheduleIndex;
+				// };
+				// auto doCstore = [&storeSchedule](int32_t workSlotIndex, int32_t storeScheduleIndex) {
+				// 	storeSchedule[storeScheduleIndex].cworkSlotIndex = workSlotIndex;
+				// };
+				auto toSelectZeroLinkToSourceIndex = [this](const Link &link) {
+					auto &node = tree->nodes[link.directions[linkDownstream].nodeIndex];
+					auto laneIndex = (link.directions[linkDownstream].linkIndicesIndex - 1) / 2;
+					return std::pair<int32_t, int32_t>{ laneIndex, node.sources[laneIndex] };
+				};
 				auto doStore = [&storeSchedule](int32_t workSlotIndex, int32_t sourceIndex) {
 					auto storeScheduleIndex = int32_t(storeSchedule.size());
 					storeSchedule.push_back({ sourceIndex, workSlotIndex });
 					return storeScheduleIndex;
 				};
-				auto doCstore = [&storeSchedule](int32_t workSlotIndex, int32_t storeScheduleIndex) {
-					storeSchedule[storeScheduleIndex].cworkSlotIndex = workSlotIndex;
+				std::vector<int32_t> selectStorageSlotSchedule;
+				auto doCstore = [&storeSchedule, &toSelectZeroLinkToSourceIndex, &selectStorageSlotSchedule](int32_t workSlotIndex, const Link &link) {
+					auto storeScheduleIndex = int32_t(storeSchedule.size());
+					auto [ laneIndex, sourceIndex ] = toSelectZeroLinkToSourceIndex(link);
+					storeSchedule.push_back({ sourceIndex, -1, workSlotIndex });
+					selectStorageSlotSchedule[laneIndex] = storeScheduleIndex;
+				};
+				auto doCstoreStore = [&storeSchedule](int32_t workSlotIndex, int32_t storeScheduleIndex) {
+					storeSchedule[storeScheduleIndex].workSlotIndex = workSlotIndex;
 				};
 				struct TmpLoad
 				{
@@ -918,7 +962,7 @@ namespace
 						energy.partCount += Plan::Mode::cost;
 						if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 						{
-							energy.steps.push_back(EnergyWithPlan::Mode{ layerIndex, workSlotIndex, tmp });
+							energy.steps.push_back(EnergyWithPlan::Mode{ layerIndex, workSlotIndex, tree->tmps[tmp].value });
 						}
 						tmpLoads[tmp].used = true;
 					}
@@ -927,7 +971,7 @@ namespace
 						energy.partCount += Plan::Cload::cost;
 						if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 						{
-							energy.steps.push_back(EnergyWithPlan::Cload{ layerIndex, nodeIndex, tmp, workSlotIndex, storageSlotIndex });
+							energy.steps.push_back(EnergyWithPlan::Cload{ layerIndex, nodeIndex, tree->tmps[tmp].value, workSlotIndex, storageSlotIndex });
 						}
 					}
 					else
@@ -936,30 +980,22 @@ namespace
 						energy.partCount += Plan::Load::cost;
 						if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 						{
-							energy.steps.push_back(EnergyWithPlan::Load{ layerIndex, nodeIndex, tmp, workSlotIndex, storageSlotIndex });
+							energy.steps.push_back(EnergyWithPlan::Load{ layerIndex, nodeIndex, tree->tmps[tmp].value, workSlotIndex, storageSlotIndex });
 						}
 					}
 				};
 				auto layerBegin = LayerBegins(layerIndex);
 				auto layerEnd = LayerBegins(layerIndex + 1);
 				int32_t workSlotsUsed = 0;
-				std::vector<int32_t> selectStorageSlotSchedule;
+				auto &lastNode = tree->nodes[nodeIndices[layerEnd - 1]];
+				if (lastNode.type == Node::select)
 				{
-					auto &lastNode = tree->nodes[nodeIndices[layerEnd - 1]];
-					if (lastNode.type == Node::select)
-					{
-						selectStorageSlotSchedule.resize(lastNode.sources.size(), -1);
-					}
+					selectStorageSlotSchedule.resize(lastNode.sources.size(), -1);
 				}
 				for (int32_t nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
 				{
 					auto nodeIndex = nodeIndices[nodeIndicesIndex];
 					auto &node = tree->nodes[nodeIndex];
-					auto toSelectZeroLinkToSourceIndex = [this](const Link &link) {
-						auto &node = tree->nodes[link.directions[linkDownstream].nodeIndex];
-						auto laneIndex = (link.directions[linkDownstream].linkIndicesIndex - 1) / 2;
-						return std::pair<int32_t, int32_t>{ laneIndex, node.sources[laneIndex] };
-					};
 					auto doLinkUpstream = [
 						this,
 						nodeIndex,
@@ -968,7 +1004,7 @@ namespace
 						&nodeIndexToLayerIndex,
 						&workSlotsUsed,
 						&doLoad,
-						&doStore,
+						&doCstore,
 						&toSelectZeroLinkToSourceIndex,
 						layerIndex
 					](int32_t linkIndicesIndex) {
@@ -986,6 +1022,17 @@ namespace
 								auto laneCount = int32_t(node.sources.size());
 								stageIndex -= laneCount * 2;
 							}
+							if (link.type == Link::toBinary && stageIndex == 0)
+							{
+								// grab stage 1 tmp if it's coming from the same layer
+								auto linkIndexNext = node.linkIndices[linkUpstream][linkIndicesIndex + 1];
+								auto &linkNext = tree->links[linkIndexNext];
+								auto linkedNodeNextIndex = linkNext.directions[linkUpstream].nodeIndex;
+								if (nodeIndexToLayerIndex[linkedNodeNextIndex] == layerIndex)
+								{
+									stageIndex += 1;
+								}
+							}
 							if (link.type == Link::toBinary && stageIndex > 0)
 							{
 								loadTmp = node.tmps[stageIndex - 1];
@@ -994,8 +1041,7 @@ namespace
 							workSlotsUsed += 1;
 							if (link.type == Link::toSelectZero)
 							{
-								auto [ laneIndex, sourceIndex ] = toSelectZeroLinkToSourceIndex(link);
-								selectStorageSlotSchedule[laneIndex] = doStore(workSlotsUsed - 1, sourceIndex);
+								doCstore(workSlotsUsed - 1, link);
 							}
 						}
 					};
@@ -1014,7 +1060,7 @@ namespace
 						for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
 						{
 							doLinkUpstream(laneIndex * 2);
-							doCstore(workSlotsUsed - 1, selectStorageSlotSchedule[laneIndex]);
+							doCstoreStore(workSlotsUsed - 1, selectStorageSlotSchedule[laneIndex]);
 						};
 					}
 					else
@@ -1034,8 +1080,7 @@ namespace
 							}
 							if (nodeIndexToLayerIndex[linkedNodeIndex] == layerIndex && link.type == Link::toSelectZero)
 							{
-								auto [ laneIndex, sourceIndex ] = toSelectZeroLinkToSourceIndex(link);
-								selectStorageSlotSchedule[laneIndex] = doStore(workSlotsUsed - 1, sourceIndex);
+								doCstore(workSlotsUsed - 1, link);
 							}
 						}
 						if (needsStore)
@@ -1372,13 +1417,13 @@ namespace
 				}
 				else if (auto *load = std::get_if<State::EnergyWithPlan::Load>(&step))
 				{
-					workSlotStates[load->workSlot].tmp = state.tree->tmps[load->tmp].value;
+					workSlotStates[load->workSlot].tmp = load->tmp;
 					workSlotStates[load->workSlot].loadedFrom = load->storageSlot;
 					workSlotStates[load->workSlot].nodeIndex = load->nodeIndex;
 				}
 				else if (auto *cload = std::get_if<State::EnergyWithPlan::Cload>(&step))
 				{
-					workSlotStates[cload->workSlot].tmp = state.tree->tmps[cload->tmp].value;
+					workSlotStates[cload->workSlot].tmp = cload->tmp;
 					workSlotStates[cload->workSlot].cloadedFrom = cload->storageSlot;
 					workSlotStates[cload->workSlot].nodeIndex = cload->nodeIndex;
 				}
@@ -1488,7 +1533,7 @@ namespace
 			}
 			else if (auto *mode = std::get_if<Plan::Mode>(&step))
 			{
-				stream << " " << plan.tmps[mode->tmp];
+				stream << " " << mode->tmp;
 			}
 			else if (auto *store = std::get_if<Plan::Store>(&step))
 			{
