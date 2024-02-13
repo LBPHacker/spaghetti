@@ -84,6 +84,7 @@ namespace
 		std::array<std::vector<int32_t>, linkMax> linkIndices;
 		std::vector<int32_t> tmps;
 		int32_t workSlotsNeeded = -1;
+		int32_t constantValue = -1;
 		std::vector<int32_t> sources;
 	};
 
@@ -112,6 +113,25 @@ namespace
 		struct StepBase
 		{
 			int32_t stackIndex;
+		};
+
+		struct Lcap : public StepBase
+		{
+			static constexpr int32_t cost = 2;
+			int32_t life3Index;
+		};
+
+		struct Lfilt : public StepBase
+		{
+			static constexpr int32_t cost = 1;
+			int32_t workSlot;
+		};
+
+		struct Rfilt : public StepBase
+		{
+			static constexpr int32_t cost = 1;
+			int32_t storageSlot;
+			int32_t constantValue = -1;
 		};
 
 		struct Top : public StepBase
@@ -189,7 +209,10 @@ namespace
 			West,
 			Clear,
 			Top,
-			Bottom
+			Bottom,
+			Lcap,
+			Lfilt,
+			Rfilt
 		>;
 		std::vector<Step> steps;
 		int32_t cost = 0;
@@ -212,7 +235,7 @@ namespace
 
 		double storageSlotOverheadPenalty;
 
-		State Initial() const;
+		State Initial(double newTemp) const;
 
 		struct CheckResult
 		{
@@ -306,8 +329,11 @@ namespace
 		}
 	};
 
+	constexpr int32_t lsnsLife3Value  = 0x10000003;
+
 	struct State
 	{
+		double temp;
 		int32_t iteration;
 		const Tree *tree{};
 		std::vector<int32_t> nodeIndices;
@@ -420,7 +446,7 @@ namespace
 			return layers[layerIndex];
 		}
 
-		State RandomNeighbour(std::mt19937_64 &rng) const
+		State RandomNeighbour(std::mt19937_64 &rng, double newTemp) const
 		{
 			auto moves = ValidMoves();
 			if (!moves.size())
@@ -431,6 +457,7 @@ namespace
 			State neighbour;
 			neighbour.iteration = iteration + 1;
 			neighbour.tree = tree;
+			neighbour.temp = newTemp;
 			auto nodeIndexToLayerIndex = NodeIndexToLayerIndex();
 			for (int32_t layerIndex2 = 0; layerIndex2 < int32_t(layers.size()) * 2; ++layerIndex2)
 			{
@@ -483,6 +510,7 @@ namespace
 
 		struct Energy
 		{
+			const Tree *tree{};
 			double linear;
 			int32_t storageSlotCount;
 			int32_t partCount = 0;
@@ -493,6 +521,13 @@ namespace
 			struct StepBase
 			{
 				int32_t layerIndex;
+			};
+
+			struct Constant : public StepBase
+			{
+				static constexpr int32_t layerOrder = 0;
+				int32_t storageSlot;
+				int32_t value;
 			};
 
 			struct Commit : public StepBase
@@ -561,7 +596,8 @@ namespace
 				Store,
 				Cstore,
 				AllocStorage,
-				UseStorage
+				UseStorage,
+				Constant
 			>;
 			std::vector<Step> steps;
 
@@ -621,12 +657,30 @@ namespace
 				});
 			}
 
-			Plan ToPlan() const
+			std::optional<Plan> ToPlan() const
 			{
+				if (tree->storageSlots < storageSlotCount)
+				{
+					return std::nullopt;
+				}
 				constexpr int32_t stackMaxCost    = 1495;
 				constexpr auto bottomTopCost      = Plan::Bottom::cost + Plan::Top::cost;
 				constexpr auto stackLayersMaxCost = stackMaxCost - bottomTopCost;
 				Plan plan;
+				int32_t lsnsLife3Index = -1;
+				std::vector<int32_t> constantValue(tree->storageSlots, -1);
+				for (auto &step : steps)
+				{
+					if (auto *constant = std::get_if<Constant>(&step))
+					{
+						constantValue[constant->storageSlot] = constant->value;
+						if (constant->value == lsnsLife3Value)
+						{
+							lsnsLife3Index = constant->storageSlot;
+						}
+					}
+				}
+				plan.steps.push_back(Plan::Lcap{ 0, lsnsLife3Index });
 				struct Buffer
 				{
 					std::vector<Plan::Step> steps;
@@ -644,18 +698,9 @@ namespace
 				auto flushStack = [&stackBuffer, &plan, &stackIndex]() {
 					if (stackBuffer.cost)
 					{
-						auto oldSize = int32_t(plan.steps.size());
-						plan.steps.push_back(Plan::Bottom{});
+						plan.steps.push_back(Plan::Bottom{ stackIndex });
 						plan.steps.insert(plan.steps.end(), stackBuffer.steps.begin(), stackBuffer.steps.end());
-						plan.steps.push_back(Plan::Top{});
-						auto newSize = int32_t(plan.steps.size());
-						for (auto index = oldSize; index < newSize; ++index)
-						{
-							std::visit([stackIndex, &plan](auto &step) {
-								step.stackIndex = stackIndex;
-								plan.cost += step.cost;
-							}, plan.steps[index]);
-						}
+						plan.steps.push_back(Plan::Top{ stackIndex });
 						stackIndex += 1;
 						stackBuffer = {};
 					}
@@ -664,12 +709,12 @@ namespace
 					pushToBuffer(layerBuffer, step);
 				};
 				auto layerOpen = false;
-				auto flushLayer = [&layerOpen, &pushToLayer, &stackBuffer, &layerBuffer, &flushStack]() {
+				auto flushLayer = [&stackIndex, &layerOpen, &pushToLayer, &stackBuffer, &layerBuffer, &flushStack]() {
 					if (layerOpen)
 					{
 						layerOpen = false;
-						pushToLayer(Plan::West{});
-						pushToLayer(Plan::Clear{});
+						pushToLayer(Plan::West{ stackIndex });
+						pushToLayer(Plan::Clear{ stackIndex });
 						assert(layerBuffer.cost <= stackLayersMaxCost);
 						if (stackBuffer.cost + layerBuffer.cost > stackLayersMaxCost)
 						{
@@ -680,14 +725,22 @@ namespace
 						layerBuffer = {};
 					}
 				};
-				auto beginLayer = [&layerOpen, &pushToLayer]() {
+				auto beginLayer = [&stackIndex, &layerOpen, &pushToLayer]() {
 					if (!layerOpen)
 					{
 						layerOpen = true;
-						pushToLayer(Plan::Aray{});
-						pushToLayer(Plan::East{});
+						pushToLayer(Plan::Aray{ stackIndex });
+						pushToLayer(Plan::East{ stackIndex });
 					}
 				};
+				for (int32_t storageSlotIndex = 0; storageSlotIndex < tree->storageSlots; ++storageSlotIndex)
+				{
+					plan.steps.push_back(Plan::Rfilt{ stackIndex, storageSlotIndex, constantValue[storageSlotIndex] });
+				}
+				for (int32_t workSlotIndex = 0; workSlotIndex < tree->workSlots; ++workSlotIndex)
+				{
+					plan.steps.push_back(Plan::Lfilt{ stackIndex, workSlotIndex });
+				}
 				for (auto &step : steps)
 				{
 					if (std::get_if<Commit>(&step))
@@ -697,30 +750,36 @@ namespace
 					else if (auto *load = std::get_if<Load>(&step))
 					{
 						beginLayer();
-						pushToLayer(Plan::Load{ load->workSlot, load->storageSlot });
+						pushToLayer(Plan::Load{ stackIndex, load->workSlot, load->storageSlot });
 					}
 					else if (auto *cload = std::get_if<Cload>(&step))
 					{
 						beginLayer();
-						pushToLayer(Plan::Cload{ cload->workSlot, cload->storageSlot });
+						pushToLayer(Plan::Cload{ stackIndex, cload->workSlot, cload->storageSlot });
 					}
 					else if (auto *store = std::get_if<Store>(&step))
 					{
 						beginLayer();
-						pushToLayer(Plan::Store{ store->workSlot, store->storageSlot });
+						pushToLayer(Plan::Store{ stackIndex, store->workSlot, store->storageSlot });
 					}
 					else if (auto *cstore = std::get_if<Cstore>(&step))
 					{
 						beginLayer();
-						pushToLayer(Plan::Cstore{ cstore->workSlot, cstore->storageSlot });
+						pushToLayer(Plan::Cstore{ stackIndex, cstore->workSlot, cstore->storageSlot });
 					}
 					else if (auto *mode = std::get_if<Mode>(&step))
 					{
 						beginLayer();
-						pushToLayer(Plan::Mode{ mode->tmp });
+						pushToLayer(Plan::Mode{ stackIndex, mode->tmp });
 					}
 				}
 				flushStack();
+				for (auto &step : plan.steps)
+				{
+					std::visit([&plan](auto &step) {
+						plan.cost += step.cost;
+					}, step);
+				}
 				return plan;
 			}
 		};
@@ -788,7 +847,11 @@ namespace
 				auto nodeIndex = constantIndex;
 				auto &node = tree->nodes[nodeIndex];
 				auto sourceIndex = node.sources[0];
-				allocStorage(0, sourceIndex, true);
+				auto storageSlotIndex = allocStorage(0, sourceIndex, true);
+				if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+				{
+					energy.steps.push_back(EnergyWithPlan::Constant{ 0, storageSlotIndex, node.constantValue });
+				}
 			}
 			for (int32_t inputIndex = 0; inputIndex < tree->inputCount; ++inputIndex)
 			{
@@ -984,6 +1047,7 @@ namespace
 			auto storageSlotOverhead = std::max(0, storageSlotCount - tree->storageSlots);
 			energy.linear = double(energy.partCount) + double(storageSlotOverhead) * tree->storageSlotOverheadPenalty;
 			energy.storageSlotCount = storageSlotCount;
+			energy.tree = tree;
 			if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 			{
 				energy.SortSteps();
@@ -992,11 +1056,12 @@ namespace
 		}
 	};
 
-	State Tree::Initial() const
+	State Tree::Initial(double newTemp) const
 	{
 		State state;
 		state.tree = this;
 		state.iteration = 0;
+		state.temp = newTemp;
 		for (int32_t nodeIndex = 0; nodeIndex < int32_t(nodes.size()); ++nodeIndex)
 		{
 			state.nodeIndices.push_back(nodeIndex);
@@ -1066,13 +1131,21 @@ namespace
 			tree.nodes[nodeIndex].sources.push_back(int32_t(tree.sources.size()));
 			tree.sources.push_back({ nodeIndex, outputIndex });
 		};
+		auto seenLsnsLife3 = false;
 		for (int32_t constantIndex = 0; constantIndex < tree.constantCount; ++constantIndex)
 		{
 			auto nodeIndex = constantIndex;
 			auto &constant = tree.nodes[nodeIndex];
 			constant.type = Node::constant;
+			stream >> constant.constantValue >> CheckCin();
+			checkRange(constant.constantValue, 0, 0x40000000);
+			if (constant.constantValue == lsnsLife3Value)
+			{
+				seenLsnsLife3 = true;
+			}
 			presentSource(nodeIndex, 0);
 		}
+		checkRange(seenLsnsLife3 ? 1 : 0, 1, 2);
 		for (int32_t inputIndex = 0; inputIndex < tree.inputCount; ++inputIndex)
 		{
 			auto nodeIndex = tree.constantCount + inputIndex;
@@ -1157,6 +1230,7 @@ namespace
 	{
 		stream << std::setfill('0');
 		auto plan = state.GetEnergy<State::EnergyWithPlan>();
+		stream << " >>>            temperature: " << state.temp << std::endl;
 		stream << " >>> successful transitions: " << state.iteration << std::endl;
 		stream << " >>>     storage slot count: " << plan.storageSlotCount;
 		auto showStorageSlots = state.tree->storageSlots;
@@ -1392,6 +1466,18 @@ namespace
 			{
 				stream << " " << cstore->workSlot << " " << cstore->storageSlot;
 			}
+			else if (auto *lcap = std::get_if<Plan::Lcap>(&step))
+			{
+				stream << " " << lcap->life3Index;
+			}
+			else if (auto *lfilt = std::get_if<Plan::Lfilt>(&step))
+			{
+				stream << " " << lfilt->workSlot;
+			}
+			else if (auto *rfilt = std::get_if<Plan::Rfilt>(&step))
+			{
+				stream << " " << rfilt->storageSlot << " " << rfilt->constantValue;
+			}
 			stream << std::endl;
 		}
 		return stream;
@@ -1408,13 +1494,13 @@ int main()
 	std::uniform_real_distribution<double> rdist(0.0, 1.0);
 	Tree tree;
 	std::cin >> tree;
-	State state = tree.Initial();
-	std::cerr << state;
 	auto temp = tempInit;
+	State state = tree.Initial(temp);
+	std::cerr << state;
 	int32_t count = 0;
 	while (temp > tempFini)
 	{
-		auto newState = state.RandomNeighbour(rng);
+		auto newState = state.RandomNeighbour(rng, temp);
 		auto energyLinear = state.GetEnergy<State::Energy>().linear;
 		auto newEnergyLinear = newState.GetEnergy<State::Energy>().linear;
 		if (TransitionProbability(energyLinear, newEnergyLinear, temp) >= rdist(rng))
@@ -1425,12 +1511,17 @@ int main()
 		if (count == 100000)
 		{
 			count = 0;
-			std::cerr << " >>>            temperature: " << temp << std::endl;
 			std::cerr << state;
 		}
 		temp -= tempLoss;
 	}
 	std::cerr << state;
-	std::cout << state.GetEnergy<State::EnergyWithPlan>().ToPlan();
+	auto plan = state.GetEnergy<State::EnergyWithPlan>().ToPlan();
+	if (!plan)
+	{
+		std::cerr << "design parameters not satisfied, no plan generated" << std::endl;
+		return 1;
+	}
+	std::cout << *plan;
 	return 0;
 }

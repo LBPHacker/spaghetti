@@ -330,15 +330,24 @@ local function preprocess_tree(output_keys)
 end
 
 local storage_slot_overhead_penalty = 10
+local LSNS_LIFE_3                   = 0x10000003
 
 local function construct_layout(stacks, storage_slots, max_work_slots, outputs, on_progress)
+	local function constant_value(expr)
+		return bit.bor(expr.keepalive_, expr.payload_)
+	end
 	local output_keys = {}
 	for _, param in ipairs(outputs) do
 		output_keys[param.node] = true
 	end
 	local filt_tmps = {}
+	local seen_life_3 = false
 	hierarchy_up(output_keys, function(expr)
-		if expr.type_ == "composite" then
+		if expr.type_ == "constant" then
+			if constant_value(expr) == LSNS_LIFE_3 then
+				seen_life_3 = true
+			end
+		elseif expr.type_ == "composite" then
 			if expr.info_.method == "filt_tmp" then
 				filt_tmps[expr.info_.filt_tmp] = expr.info_
 			end
@@ -349,7 +358,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 	local inputs = {}
 	local composites = {}
 	local index_to_expr = {}
-	ts_down(output_keys, function(expr)
+	local function prepare_expr(expr)
 		table.insert(index_to_expr, {
 			index = #index_to_expr + 1,
 			expr  = expr,
@@ -362,7 +371,11 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 			table.insert(composites, expr)
 		end
 		return true
-	end)
+	end
+	if not seen_life_3 then
+		prepare_expr(user_node.make_constant_(LSNS_LIFE_3, 0))
+	end
+	ts_down(output_keys, prepare_expr)
 	local type_order = {
 		constant  = 1,
 		input     = 2,
@@ -400,38 +413,39 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 	io.stdout:write("\n")
 	io.stdout:write(("%f\n"):format(storage_slot_overhead_penalty))
 	io.stdout:write(("%i %i %i %i\n"):format(#constants, #inputs, #composites, #outputs))
-	for _, item in ipairs(index_to_expr) do
-		local expr = item.expr
-		if expr.type_ == "composite" then
-			local function get_expr_index(param_index)
-				return param_to_index(expr.params_[expr.info_.params[param_index]])
-			end
-			if expr.info_.method == "filt_tmp" then
-				io.stdout:write(("%i %i %i\n"):format(
-					filt_tmp_to_index[expr.info_.filt_tmp] - 1,
-					get_expr_index(2), -- rhs comes first
-					get_expr_index(1)
+	for _, expr in ipairs(constants) do
+		io.stdout:write(("%i "):format(constant_value(expr)))
+	end
+	io.stdout:write("\n")
+	for _, expr in ipairs(composites) do
+		local function get_expr_index(param_index)
+			return param_to_index(expr.params_[expr.info_.params[param_index]])
+		end
+		if expr.info_.method == "filt_tmp" then
+			io.stdout:write(("%i %i %i\n"):format(
+				filt_tmp_to_index[expr.info_.filt_tmp] - 1,
+				get_expr_index(2), -- rhs comes first
+				get_expr_index(1)
+			))
+		else
+			io.stdout:write(("%i %i %i"):format(
+				#index_to_filt_tmp,
+				expr.info_.lanes,
+				expr.info_.stages
+			))
+			for j = 1, expr.info_.lanes do
+				io.stdout:write((" %i %i"):format(
+					get_expr_index(j * 2 - 1),
+					get_expr_index(j * 2)
 				))
-			else
-				io.stdout:write(("%i %i %i"):format(
-					#index_to_filt_tmp,
-					expr.info_.lanes,
-					expr.info_.stages
-				))
-				for j = 1, expr.info_.lanes do
-					io.stdout:write((" %i %i"):format(
-						get_expr_index(j * 2 - 1),
-						get_expr_index(j * 2)
-					))
-				end
-				for j = 1, expr.info_.stages do
-					if j > 1 then
-						io.stdout:write((" %i"):format(filt_tmp_to_index[expr.info_.filt_tmps[j]] - 1))
-					end
-					io.stdout:write((" %i"):format(get_expr_index(expr.info_.lanes * 2 + j)))
-				end
-				io.stdout:write("\n")
 			end
+			for j = 1, expr.info_.stages do
+				if j > 1 then
+					io.stdout:write((" %i"):format(filt_tmp_to_index[expr.info_.filt_tmps[j]] - 1))
+				end
+				io.stdout:write((" %i"):format(get_expr_index(expr.info_.lanes * 2 + j)))
+			end
+			io.stdout:write("\n")
 		end
 	end
 	for _, param in ipairs(outputs) do
