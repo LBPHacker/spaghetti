@@ -107,6 +107,96 @@ namespace
 
 	struct State;
 
+	struct Plan
+	{
+		struct StepBase
+		{
+			int32_t stackIndex;
+		};
+
+		struct Top : public StepBase
+		{
+			static constexpr int32_t cost = 1;
+		};
+
+		struct Bottom : public StepBase
+		{
+			static constexpr int32_t cost = 4;
+		};
+
+		struct Load : public StepBase
+		{
+			static constexpr int32_t cost = 2;
+			int32_t workSlot;
+			int32_t storageSlot;
+		};
+
+		struct Cload : public StepBase
+		{
+			static constexpr int32_t cost = 1;
+			int32_t workSlot;
+			int32_t storageSlot;
+		};
+
+		struct Mode : public StepBase
+		{
+			static constexpr int32_t cost = 2;
+			int32_t tmp;
+		};
+
+		struct Store : public StepBase
+		{
+			static constexpr int32_t cost = 2;
+			int32_t workSlot;
+			int32_t storageSlot;
+		};
+
+		struct Cstore : public StepBase
+		{
+			static constexpr int32_t cost = 1;
+			int32_t workSlot;
+			int32_t storageSlot;
+		};
+
+		struct Aray : public StepBase
+		{
+			static constexpr int32_t cost = 5;
+		};
+
+		struct East : public StepBase
+		{
+			static constexpr int32_t cost = 6;
+		};
+
+		struct West : public StepBase
+		{
+			static constexpr int32_t cost = 6;
+		};
+
+		struct Clear : public StepBase
+		{
+			static constexpr int32_t cost = 1;
+		};
+
+		using Step = std::variant<
+			Load,
+			Cload,
+			Mode,
+			Store,
+			Cstore,
+			Aray,
+			East,
+			West,
+			Clear,
+			Top,
+			Bottom
+		>;
+		std::vector<Step> steps;
+		int32_t cost = 0;
+
+		static constexpr auto commitCost = Aray::cost + East::cost + West::cost + Clear::cost;
+	};
+
 	struct Tree
 	{
 		int32_t workSlots;
@@ -121,12 +211,6 @@ namespace
 		std::vector<Source> sources;
 
 		double storageSlotOverheadPenalty;
-		int32_t commitCost;
-		int32_t loadCost;
-		int32_t cloadCost;
-		int32_t modeCost;
-		int32_t storeCost;
-		int32_t cstoreCost;
 
 		State Initial() const;
 
@@ -397,68 +481,250 @@ namespace
 			return neighbour;
 		}
 
-		struct Commit
-		{
-		};
-		struct Load
-		{
-			int32_t nodeIndex;
-			int32_t tmp;
-			int32_t workSlot;
-			int32_t storageSlot;
-		};
-		struct Cload
-		{
-			int32_t nodeIndex;
-			int32_t tmp;
-			int32_t workSlot;
-			int32_t storageSlot;
-		};
-		struct Mode
-		{
-			int32_t workSlot;
-			int32_t tmp;
-		};
-		struct Store
-		{
-			int32_t workSlot;
-			int32_t storageSlot;
-		};
-		struct Cstore
-		{
-			int32_t workSlot;
-			int32_t storageSlot;
-		};
-		struct AllocStorage
-		{
-			int32_t sourceIndex;
-			int32_t storageSlot;
-			int32_t uses;
-		};
-		struct UseStorage
-		{
-			int32_t storageSlot;
-		};
-		using PlanStep = std::variant<
-			Commit,
-			Load,
-			Cload,
-			Mode,
-			Store,
-			Cstore,
-			AllocStorage,
-			UseStorage
-		>;
 		struct Energy
 		{
 			double linear;
 			int32_t storageSlotCount;
 			int32_t partCount = 0;
 		};
-		struct Plan : public Energy
+
+		struct EnergyWithPlan : public Energy
 		{
-			std::vector<PlanStep> steps;
+			struct StepBase
+			{
+				int32_t layerIndex;
+			};
+
+			struct Commit : public StepBase
+			{
+				static constexpr int32_t layerOrder = 5;
+			};
+
+			struct Load : public StepBase
+			{
+				static constexpr int32_t layerOrder = 0;
+				int32_t nodeIndex;
+				int32_t tmp;
+				int32_t workSlot;
+				int32_t storageSlot;
+			};
+
+			struct Cload : public StepBase
+			{
+				static constexpr int32_t layerOrder = 0;
+				int32_t nodeIndex;
+				int32_t tmp;
+				int32_t workSlot;
+				int32_t storageSlot;
+			};
+
+			struct Mode : public StepBase
+			{
+				static constexpr int32_t layerOrder = 0;
+				int32_t workSlot;
+				int32_t tmp;
+			};
+
+			struct Store : public StepBase
+			{
+				static constexpr int32_t layerOrder = 1;
+				int32_t workSlot;
+				int32_t storageSlot;
+			};
+
+			struct Cstore : public StepBase
+			{
+				static constexpr int32_t layerOrder = 2;
+				int32_t workSlot;
+				int32_t storageSlot;
+			};
+
+			struct AllocStorage : public StepBase
+			{
+				static constexpr int32_t layerOrder = 4;
+				int32_t sourceIndex;
+				int32_t storageSlot;
+				int32_t uses;
+			};
+
+			struct UseStorage : public StepBase
+			{
+				static constexpr int32_t layerOrder = 3;
+				int32_t storageSlot;
+			};
+
+			using Step = std::variant<
+				Commit,
+				Load,
+				Cload,
+				Mode,
+				Store,
+				Cstore,
+				AllocStorage,
+				UseStorage
+			>;
+			std::vector<Step> steps;
+
+			void SortSteps()
+			{
+				std::sort(steps.begin(), steps.end(), [](auto &lhs, auto &rhs) {
+					auto layerIndex = [](auto &step) {
+						return std::visit([](auto &thing) {
+							return thing.layerIndex;
+						}, step);
+					};
+					auto lhsLayerIndex = layerIndex(lhs);
+					auto rhsLayerIndex = layerIndex(rhs);
+					if (lhsLayerIndex != rhsLayerIndex)
+					{
+						return lhsLayerIndex < rhsLayerIndex;
+					}
+					// at this point only order within the layer needs to be established
+					auto layerOrder = [](auto &step) {
+						return std::visit([](auto &thing) {
+							return thing.layerOrder;
+						}, step);
+					};
+					auto lhsLayerOrder = layerOrder(lhs);
+					auto rhsLayerOrder = layerOrder(rhs);
+					if (lhsLayerOrder != rhsLayerOrder)
+					{
+						return lhsLayerOrder < rhsLayerOrder;
+					}
+					// at this point only order among Mode, Load, and Cload needs to be established
+					auto tmpOrder = [](auto &step) -> std::pair<int32_t, int32_t> {
+						if (auto *load = std::get_if<EnergyWithPlan::Load>(&step))
+						{
+							return { load->tmp, 1 };
+						}
+						else if (auto *cload = std::get_if<EnergyWithPlan::Cload>(&step))
+						{
+							return { cload->tmp, 2 };
+						}
+						else if (auto *mode = std::get_if<EnergyWithPlan::Mode>(&step))
+						{
+							return { mode->tmp, 0 };
+						}
+						return { -1, -1 };
+					};
+					auto [ lhsTmp, lhsTmpOrder ] = tmpOrder(lhs);
+					auto [ rhsTmp, rhsTmpOrder ] = tmpOrder(rhs);
+					if (lhsTmp != rhsTmp)
+					{
+						return lhsTmp > rhsTmp;
+					}
+					if (lhsTmpOrder != rhsTmpOrder)
+					{
+						return lhsTmpOrder < rhsTmpOrder;
+					}
+					return false;
+				});
+			}
+
+			Plan ToPlan() const
+			{
+				constexpr int32_t stackMaxCost    = 1495;
+				constexpr auto bottomTopCost      = Plan::Bottom::cost + Plan::Top::cost;
+				constexpr auto stackLayersMaxCost = stackMaxCost - bottomTopCost;
+				Plan plan;
+				struct Buffer
+				{
+					std::vector<Plan::Step> steps;
+					int32_t cost = 0;
+				};
+				Buffer stackBuffer;
+				Buffer layerBuffer;
+				auto pushToBuffer = [](Buffer &buffer, Plan::Step step) {
+					buffer.steps.push_back(step);
+					buffer.cost += std::visit([](auto &step) {
+						return step.cost;
+					}, step);
+				};
+				int32_t stackIndex = 0;
+				auto flushStack = [&stackBuffer, &plan, &stackIndex]() {
+					if (stackBuffer.cost)
+					{
+						auto oldSize = int32_t(plan.steps.size());
+						plan.steps.push_back(Plan::Bottom{});
+						plan.steps.insert(plan.steps.end(), stackBuffer.steps.begin(), stackBuffer.steps.end());
+						plan.steps.push_back(Plan::Top{});
+						auto newSize = int32_t(plan.steps.size());
+						for (auto index = oldSize; index < newSize; ++index)
+						{
+							std::visit([stackIndex, &plan](auto &step) {
+								step.stackIndex = stackIndex;
+								plan.cost += step.cost;
+							}, plan.steps[index]);
+						}
+						stackIndex += 1;
+						stackBuffer = {};
+					}
+				};
+				auto pushToLayer = [&layerBuffer, &pushToBuffer](Plan::Step step) {
+					pushToBuffer(layerBuffer, step);
+				};
+				auto layerOpen = false;
+				auto flushLayer = [&layerOpen, &pushToLayer, &stackBuffer, &layerBuffer, &flushStack]() {
+					if (layerOpen)
+					{
+						layerOpen = false;
+						pushToLayer(Plan::West{});
+						pushToLayer(Plan::Clear{});
+						assert(layerBuffer.cost <= stackLayersMaxCost);
+						if (stackBuffer.cost + layerBuffer.cost > stackLayersMaxCost)
+						{
+							flushStack();
+						}
+						stackBuffer.steps.insert(stackBuffer.steps.end(), layerBuffer.steps.begin(), layerBuffer.steps.end());
+						stackBuffer.cost += layerBuffer.cost;
+						layerBuffer = {};
+					}
+				};
+				auto beginLayer = [&layerOpen, &pushToLayer]() {
+					if (!layerOpen)
+					{
+						layerOpen = true;
+						pushToLayer(Plan::Aray{});
+						pushToLayer(Plan::East{});
+					}
+				};
+				for (auto &step : steps)
+				{
+					if (std::get_if<Commit>(&step))
+					{
+						flushLayer();
+					}
+					else if (auto *load = std::get_if<Load>(&step))
+					{
+						beginLayer();
+						pushToLayer(Plan::Load{ load->workSlot, load->storageSlot });
+					}
+					else if (auto *cload = std::get_if<Cload>(&step))
+					{
+						beginLayer();
+						pushToLayer(Plan::Cload{ cload->workSlot, cload->storageSlot });
+					}
+					else if (auto *store = std::get_if<Store>(&step))
+					{
+						beginLayer();
+						pushToLayer(Plan::Store{ store->workSlot, store->storageSlot });
+					}
+					else if (auto *cstore = std::get_if<Cstore>(&step))
+					{
+						beginLayer();
+						pushToLayer(Plan::Cstore{ cstore->workSlot, cstore->storageSlot });
+					}
+					else if (auto *mode = std::get_if<Mode>(&step))
+					{
+						beginLayer();
+						pushToLayer(Plan::Mode{ mode->tmp });
+					}
+				}
+				flushStack();
+				return plan;
+			}
 		};
+
 		template<class EnergyType>
 		EnergyType GetEnergy() const
 		{
@@ -471,7 +737,7 @@ namespace
 			};
 			std::vector<std::optional<int32_t>> slots;
 			std::vector<Storage> storage(tree->sources.size(), { 0, -1 });
-			auto allocStorage = [this, &energy, &storage, &slots](int32_t sourceIndex, bool forConstant) {
+			auto allocStorage = [this, &energy, &storage, &slots](int32_t layerIndex, int32_t sourceIndex, bool forConstant) {
 				std::optional<int32_t> freeSlotIndex;
 				for (int32_t slotIndex = 0; slotIndex < int32_t(slots.size()); ++slotIndex)
 				{
@@ -493,13 +759,13 @@ namespace
 					uses = -1; // constants have infinite uses
 				}
 				storage[sourceIndex] = { uses, *freeSlotIndex };
-				if constexpr (std::is_same_v<EnergyType, Plan>)
+				if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 				{
-					energy.steps.push_back(AllocStorage{ sourceIndex, *freeSlotIndex, uses });
+					energy.steps.push_back(EnergyWithPlan::AllocStorage{ layerIndex, sourceIndex, *freeSlotIndex, uses });
 				}
 				return *freeSlotIndex;
 			};
-			auto useStorage = [&energy, &storage, &slots](int32_t sourceIndex) {
+			auto useStorage = [&energy, &storage, &slots](int32_t layerIndex, int32_t sourceIndex) {
 				auto slotIndex = storage[sourceIndex].slotIndex;
 				auto &usesLeft = storage[sourceIndex].usesLeft;
 				if (usesLeft != -1)
@@ -511,9 +777,9 @@ namespace
 						slots[slotIndex] = std::nullopt;
 					}
 				}
-				if constexpr (std::is_same_v<EnergyType, Plan>)
+				if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 				{
-					energy.steps.push_back(UseStorage{ slotIndex });
+					energy.steps.push_back(EnergyWithPlan::UseStorage{ layerIndex, slotIndex });
 				}
 				return slotIndex;
 			};
@@ -522,18 +788,18 @@ namespace
 				auto nodeIndex = constantIndex;
 				auto &node = tree->nodes[nodeIndex];
 				auto sourceIndex = node.sources[0];
-				allocStorage(sourceIndex, true);
+				allocStorage(0, sourceIndex, true);
 			}
 			for (int32_t inputIndex = 0; inputIndex < tree->inputCount; ++inputIndex)
 			{
 				auto nodeIndex = tree->constantCount + inputIndex;
 				auto &node = tree->nodes[nodeIndex];
 				auto sourceIndex = node.sources[0];
-				allocStorage(sourceIndex, false);
+				allocStorage(0, sourceIndex, false);
 			}
-			if constexpr (std::is_same_v<EnergyType, Plan>)
+			if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 			{
-				energy.steps.push_back(Commit{});
+				energy.steps.push_back(EnergyWithPlan::Commit{ 0 });
 			}
 			for (int32_t layerIndex = 1; layerIndex < int32_t(layers.size()) - 1; ++layerIndex)
 			{
@@ -558,32 +824,32 @@ namespace
 					std::vector<int32_t> slotUsed; // std::vector<bool> is stupid
 				};
 				std::vector<TmpLoad> tmpLoads(tree->tmps.size(), { false, std::vector<int32_t>(slots.size(), 0) });
-				auto doLoad = [this, &energy, &useStorage, &tmpLoads](int32_t nodeIndex, int32_t workSlotIndex, int32_t sourceIndex, int32_t tmp) {
-					auto storageSlotIndex = useStorage(sourceIndex);
+				auto doLoad = [this, &energy, &useStorage, &tmpLoads, layerIndex](int32_t nodeIndex, int32_t workSlotIndex, int32_t sourceIndex, int32_t tmp) {
+					auto storageSlotIndex = useStorage(layerIndex, sourceIndex);
 					if (!tmpLoads[tmp].used)
 					{
-						energy.partCount += tree->modeCost;
-						if constexpr (std::is_same_v<EnergyType, Plan>)
+						energy.partCount += Plan::Mode::cost;
+						if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 						{
-							energy.steps.push_back(Mode{ workSlotIndex, tmp });
+							energy.steps.push_back(EnergyWithPlan::Mode{ layerIndex, workSlotIndex, tmp });
 						}
 						tmpLoads[tmp].used = true;
 					}
 					if (tmpLoads[tmp].slotUsed[storageSlotIndex])
 					{
-						energy.partCount += tree->cloadCost;
-						if constexpr (std::is_same_v<EnergyType, Plan>)
+						energy.partCount += Plan::Cload::cost;
+						if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 						{
-							energy.steps.push_back(Cload{ nodeIndex, tmp, workSlotIndex, storageSlotIndex });
+							energy.steps.push_back(EnergyWithPlan::Cload{ layerIndex, nodeIndex, tmp, workSlotIndex, storageSlotIndex });
 						}
 					}
 					else
 					{
 						tmpLoads[tmp].slotUsed[storageSlotIndex] = 1;
-						energy.partCount += tree->loadCost;
-						if constexpr (std::is_same_v<EnergyType, Plan>)
+						energy.partCount += Plan::Load::cost;
+						if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 						{
-							energy.steps.push_back(Load{ nodeIndex, tmp, workSlotIndex, storageSlotIndex });
+							energy.steps.push_back(EnergyWithPlan::Load{ layerIndex, nodeIndex, tmp, workSlotIndex, storageSlotIndex });
 						}
 					}
 				};
@@ -693,31 +959,35 @@ namespace
 				}
 				for (auto &storeScheduleEntry : storeSchedule)
 				{
-					auto storageSlotIndex = allocStorage(storeScheduleEntry.sourceIndex, false);
-					energy.partCount += tree->storeCost;
-					if constexpr (std::is_same_v<EnergyType, Plan>)
+					auto storageSlotIndex = allocStorage(layerIndex, storeScheduleEntry.sourceIndex, false);
+					energy.partCount += Plan::Store::cost;
+					if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 					{
-						energy.steps.push_back(Store{ storeScheduleEntry.workSlotIndex, storageSlotIndex });
+						energy.steps.push_back(EnergyWithPlan::Store{ layerIndex, storeScheduleEntry.workSlotIndex, storageSlotIndex });
 					}
 					if (storeScheduleEntry.cworkSlotIndex)
 					{
-						energy.partCount += tree->cstoreCost;
-						if constexpr (std::is_same_v<EnergyType, Plan>)
+						energy.partCount += Plan::Cstore::cost;
+						if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 						{
-							energy.steps.push_back(Cstore{ *storeScheduleEntry.cworkSlotIndex, storageSlotIndex });
+							energy.steps.push_back(EnergyWithPlan::Cstore{ layerIndex, *storeScheduleEntry.cworkSlotIndex, storageSlotIndex });
 						}
 					}
 				}
-				energy.partCount += tree->commitCost;
-				if constexpr (std::is_same_v<EnergyType, Plan>)
+				energy.partCount += Plan::commitCost;
+				if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 				{
-					energy.steps.push_back(Commit{});
+					energy.steps.push_back(EnergyWithPlan::Commit{ layerIndex });
 				}
 			}
 			auto storageSlotCount = int32_t(slots.size());
 			auto storageSlotOverhead = std::max(0, storageSlotCount - tree->storageSlots);
 			energy.linear = double(energy.partCount) + double(storageSlotOverhead) * tree->storageSlotOverheadPenalty;
 			energy.storageSlotCount = storageSlotCount;
+			if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+			{
+				energy.SortSteps();
+			}
 			return energy;
 		}
 	};
@@ -764,7 +1034,7 @@ namespace
 			stream >> tmp.commutative >> CheckCin();
 		}
 		tree.tmps.insert(tree.tmps.begin(), { false });
-		stream >> tree.storageSlotOverheadPenalty >> tree.commitCost >> tree.loadCost >> tree.cloadCost >> tree.modeCost >> tree.storeCost >> tree.cstoreCost;
+		stream >> tree.storageSlotOverheadPenalty;
 		stream >> tree.constantCount >> tree.inputCount >> tree.compositeCount >> tree.outputCount >> CheckCin();
 		checkRange(tree.constantCount, 0, bigNumber);
 		checkRange(tree.inputCount, 1, bigNumber);
@@ -776,7 +1046,7 @@ namespace
 		auto tmpSelect = tmpCount;
 		auto maxInnerTmp = tmpCount;
 		auto maxOuterTmp = tmpCount + 1;
-		auto link = [&tree](Node &node, uint32_t sourceIndex, Link::LinkType linkType) {
+		auto link = [&tree](Node &node, int32_t sourceIndex, Link::LinkType linkType) {
 			auto &source = tree.sources[sourceIndex];
 			source.uses += 1;
 			auto nodeIndex = source.nodeIndex;
@@ -886,7 +1156,7 @@ namespace
 	std::ostream &operator <<(std::ostream &stream, const State &state)
 	{
 		stream << std::setfill('0');
-		auto plan = state.GetEnergy<State::Plan>();
+		auto plan = state.GetEnergy<State::EnergyWithPlan>();
 		stream << " >>> successful transitions: " << state.iteration << std::endl;
 		stream << " >>>     storage slot count: " << plan.storageSlotCount;
 		auto showStorageSlots = state.tree->storageSlots;
@@ -915,12 +1185,12 @@ namespace
 			int32_t usesLeft;
 		};
 		std::vector<StorageSlot> storageSlots(showStorageSlots);
-		auto handleStoragePlanStep = [&storageSlots](State::PlanStep &step) {
-			if (auto *allocStorage = std::get_if<State::AllocStorage>(&step))
+		auto handleStoragePlanStep = [&storageSlots](auto &step) {
+			if (auto *allocStorage = std::get_if<State::EnergyWithPlan::AllocStorage>(&step))
 			{
 				storageSlots[allocStorage->storageSlot] = { allocStorage->sourceIndex, allocStorage->uses };
 			}
-			else if (auto *useStorage = std::get_if<State::UseStorage>(&step))
+			else if (auto *useStorage = std::get_if<State::EnergyWithPlan::UseStorage>(&step))
 			{
 				if (storageSlots[useStorage->storageSlot].usesLeft > 0)
 				{
@@ -966,7 +1236,7 @@ namespace
 		{
 			auto &step = plan.steps[planIndex];
 			planIndex += 1;
-			if (std::get_if<State::Commit>(&step))
+			if (std::get_if<State::EnergyWithPlan::Commit>(&step))
 			{
 				break;
 			}
@@ -990,31 +1260,31 @@ namespace
 			{
 				auto &step = plan.steps[planIndex];
 				planIndex += 1;
-				if (std::get_if<State::Commit>(&step))
+				if (std::get_if<State::EnergyWithPlan::Commit>(&step))
 				{
 					break;
 				}
-				else if (auto *load = std::get_if<State::Load>(&step))
+				else if (auto *load = std::get_if<State::EnergyWithPlan::Load>(&step))
 				{
 					workSlotStates[load->workSlot].tmp = load->tmp;
 					workSlotStates[load->workSlot].loadedFrom = load->storageSlot;
 					workSlotStates[load->workSlot].nodeIndex = load->nodeIndex;
 				}
-				else if (auto *cload = std::get_if<State::Cload>(&step))
+				else if (auto *cload = std::get_if<State::EnergyWithPlan::Cload>(&step))
 				{
 					workSlotStates[cload->workSlot].tmp = cload->tmp;
 					workSlotStates[cload->workSlot].cloadedFrom = cload->storageSlot;
 					workSlotStates[cload->workSlot].nodeIndex = cload->nodeIndex;
 				}
-				else if (auto *store = std::get_if<State::Store>(&step))
+				else if (auto *store = std::get_if<State::EnergyWithPlan::Store>(&step))
 				{
 					workSlotStates[store->workSlot].storedTo = store->storageSlot;
 				}
-				else if (auto *cstore = std::get_if<State::Cstore>(&step))
+				else if (auto *cstore = std::get_if<State::EnergyWithPlan::Cstore>(&step))
 				{
 					workSlotStates[cstore->workSlot].cstoredTo = cstore->storageSlot;
 				}
-				else if (auto *mode = std::get_if<State::Mode>(&step))
+				else if (auto *mode = std::get_if<State::EnergyWithPlan::Mode>(&step))
 				{
 					workSlotStates[mode->workSlot].triggeredMode = true;
 				}
@@ -1083,13 +1353,6 @@ namespace
 				stream << "|";
 			}
 			stream << std::endl;
-			// auto layerBegin = state.LayerBegins(layerIndex);
-			// auto layerEnd = state.LayerBegins(layerIndex + 1);
-			// for (auto nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
-			// {
-			// 	auto nodeIndex = state.nodeIndices[nodeIndicesIndex];
-			// 	stream << std::setfill('0') << std::setw(3) << nodeIndex << " ";
-			// }
 		}
 		emitStorageSlotsTop(storageSlots);
 		stream << std::endl;
@@ -1099,12 +1362,46 @@ namespace
 		stream << std::endl;
 		return stream;
 	}
+
+	std::ostream &operator <<(std::ostream &stream, const Plan &plan)
+	{
+		stream << plan.steps.size() << " " << plan.cost << std::endl;
+		for (auto &step : plan.steps)
+		{
+			std::visit([&stream](auto &step) {
+				stream << step.stackIndex << " ";
+			}, step);
+			stream << step.index();
+			if (auto *load = std::get_if<Plan::Load>(&step))
+			{
+				stream << " " << load->workSlot << " " << load->storageSlot;
+			}
+			else if (auto *cload = std::get_if<Plan::Cload>(&step))
+			{
+				stream << " " << cload->workSlot << " " << cload->storageSlot;
+			}
+			else if (auto *mode = std::get_if<Plan::Mode>(&step))
+			{
+				stream << " " << mode->tmp;
+			}
+			else if (auto *store = std::get_if<Plan::Store>(&step))
+			{
+				stream << " " << store->workSlot << " " << store->storageSlot;
+			}
+			else if (auto *cstore = std::get_if<Plan::Cstore>(&step))
+			{
+				stream << " " << cstore->workSlot << " " << cstore->storageSlot;
+			}
+			stream << std::endl;
+		}
+		return stream;
+	}
 }
 
 int main()
 {
 	constexpr auto tempInit = 1.0;
-	constexpr auto tempFini = 1e-5;
+	constexpr auto tempFini = 0.8;
 	constexpr auto tempLoss = 1e-7;
 	std::random_device rd;
 	std::mt19937_64 rng(rd());
@@ -1128,10 +1425,12 @@ int main()
 		if (count == 100000)
 		{
 			count = 0;
+			std::cerr << " >>>            temperature: " << temp << std::endl;
 			std::cerr << state;
 		}
 		temp -= tempLoss;
-		// temp *= tempLoss;
 	}
+	std::cerr << state;
+	std::cout << state.GetEnergy<State::EnergyWithPlan>().ToPlan();
 	return 0;
 }

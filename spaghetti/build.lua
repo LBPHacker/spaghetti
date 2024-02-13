@@ -330,12 +330,6 @@ local function preprocess_tree(output_keys)
 end
 
 local storage_slot_overhead_penalty = 10
-local commit_cost                   = 18
-local load_cost                     =  2
-local cload_cost                    =  1
-local mode_cost                     =  2
-local store_cost                    =  2
-local cstore_cost                   =  1
 
 local function construct_layout(stacks, storage_slots, max_work_slots, outputs, on_progress)
 	local output_keys = {}
@@ -404,15 +398,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 		io.stdout:write(("%i "):format(filt_tmps[index_to_filt_tmp[i]].commutative and 1 or 0))
 	end
 	io.stdout:write("\n")
-	io.stdout:write(("%f %i %i %i %i %i %i\n"):format(
-		storage_slot_overhead_penalty,
-		commit_cost,
-		load_cost,
-		cload_cost,
-		mode_cost,
-		store_cost,
-		cstore_cost
-	))
+	io.stdout:write(("%f\n"):format(storage_slot_overhead_penalty))
 	io.stdout:write(("%i %i %i %i\n"):format(#constants, #inputs, #composites, #outputs))
 	for _, item in ipairs(index_to_expr) do
 		local expr = item.expr
