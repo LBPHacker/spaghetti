@@ -84,7 +84,6 @@ namespace
 		std::array<std::vector<int32_t>, linkMax> linkIndices;
 		std::vector<int32_t> tmps;
 		int32_t workSlotsNeeded = -1;
-		int32_t constantValue = -1;
 		std::vector<int32_t> sources;
 	};
 
@@ -156,7 +155,6 @@ namespace
 		{
 			static constexpr int32_t cost = 1;
 			int32_t workSlot;
-			int32_t storageSlot;
 		};
 
 		struct Mode : public StepBase
@@ -234,6 +232,8 @@ namespace
 		std::vector<Node> nodes;
 		std::vector<Link> links;
 		std::vector<Tmp> tmps;
+		std::vector<int32_t> constantValues;
+		std::vector<int32_t> inputStorageSlots;
 		std::vector<Source> sources;
 
 		double storageSlotOverheadPenalty;
@@ -762,7 +762,7 @@ namespace
 					else if (auto *cload = std::get_if<Cload>(&step))
 					{
 						beginLayer();
-						pushToLayer(Plan::Cload{ stackIndex, cload->workSlot, cload->storageSlot });
+						pushToLayer(Plan::Cload{ stackIndex, cload->workSlot });
 					}
 					else if (auto *store = std::get_if<Store>(&step))
 					{
@@ -799,19 +799,34 @@ namespace
 			auto nodeIndexToLayerIndex = NodeIndexToLayerIndex();
 			struct Storage
 			{
-				int32_t usesLeft;
-				int32_t slotIndex;
+				int32_t usesLeft = 0;
+				int32_t slotIndex = -1;
 			};
 			std::vector<std::optional<int32_t>> slots;
-			std::vector<Storage> storage(tree->sources.size(), { 0, -1 });
-			auto allocStorage = [this, &energy, &storage, &slots](int32_t layerIndex, int32_t sourceIndex, bool forConstant) {
-				std::optional<int32_t> freeSlotIndex;
-				for (int32_t slotIndex = 0; slotIndex < int32_t(slots.size()); ++slotIndex)
+			std::vector<Storage> storage(tree->sources.size());
+			auto allocStorage = [
+				this,
+				&energy,
+				&storage,
+				&slots
+			](int32_t layerIndex, int32_t sourceIndex, bool forConstant, std::optional<int32_t> freeSlotIndex) {
+				if (freeSlotIndex)
 				{
-					if (!slots[slotIndex])
+					auto minSize = *freeSlotIndex + 1;
+					if (int32_t(slots.size()) < minSize)
 					{
-						freeSlotIndex = slotIndex;
-						break;
+						slots.resize(minSize);
+					}
+				}
+				if (!freeSlotIndex)
+				{
+					for (int32_t slotIndex = 0; slotIndex < int32_t(slots.size()); ++slotIndex)
+					{
+						if (!slots[slotIndex])
+						{
+							freeSlotIndex = slotIndex;
+							break;
+						}
 					}
 				}
 				if (!freeSlotIndex)
@@ -819,6 +834,7 @@ namespace
 					freeSlotIndex = slots.size();
 					slots.emplace_back();
 				}
+				assert(!slots[*freeSlotIndex]);
 				slots[*freeSlotIndex] = sourceIndex;
 				auto uses = tree->sources[sourceIndex].uses;
 				if (forConstant)
@@ -850,23 +866,23 @@ namespace
 				}
 				return slotIndex;
 			};
-			for (int32_t constantIndex = 0; constantIndex < tree->constantCount; ++constantIndex)
-			{
-				auto nodeIndex = constantIndex;
-				auto &node = tree->nodes[nodeIndex];
-				auto sourceIndex = node.sources[0];
-				auto storageSlotIndex = allocStorage(0, sourceIndex, true);
-				if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
-				{
-					energy.steps.push_back(EnergyWithPlan::Constant{ 0, storageSlotIndex, node.constantValue });
-				}
-			}
 			for (int32_t inputIndex = 0; inputIndex < tree->inputCount; ++inputIndex)
 			{
 				auto nodeIndex = tree->constantCount + inputIndex;
 				auto &node = tree->nodes[nodeIndex];
 				auto sourceIndex = node.sources[0];
-				allocStorage(0, sourceIndex, false);
+				allocStorage(0, sourceIndex, false, tree->inputStorageSlots[inputIndex]);
+			}
+			for (int32_t constantIndex = 0; constantIndex < tree->constantCount; ++constantIndex)
+			{
+				auto nodeIndex = constantIndex;
+				auto &node = tree->nodes[nodeIndex];
+				auto sourceIndex = node.sources[0];
+				auto storageSlotIndex = allocStorage(0, sourceIndex, true, std::nullopt);
+				if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+				{
+					energy.steps.push_back(EnergyWithPlan::Constant{ 0, storageSlotIndex, tree->constantValues[constantIndex] });
+				}
 			}
 			if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 			{
@@ -1030,7 +1046,7 @@ namespace
 				}
 				for (auto &storeScheduleEntry : storeSchedule)
 				{
-					auto storageSlotIndex = allocStorage(layerIndex, storeScheduleEntry.sourceIndex, false);
+					auto storageSlotIndex = allocStorage(layerIndex, storeScheduleEntry.sourceIndex, false, std::nullopt);
 					energy.partCount += Plan::Store::cost;
 					if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 					{
@@ -1142,25 +1158,31 @@ namespace
 			tree.sources.push_back({ nodeIndex, outputIndex });
 		};
 		auto seenLsnsLife3 = false;
+		tree.constantValues.resize(tree.constantCount);
 		for (int32_t constantIndex = 0; constantIndex < tree.constantCount; ++constantIndex)
 		{
 			auto nodeIndex = constantIndex;
 			auto &constant = tree.nodes[nodeIndex];
 			constant.type = Node::constant;
-			stream >> constant.constantValue >> CheckCin();
-			checkRange(constant.constantValue, 0, 0x40000000);
-			if (constant.constantValue == lsnsLife3Value)
+			auto &constantValue = tree.constantValues[constantIndex];
+			stream >> constantValue >> CheckCin();
+			checkRange(constantValue, 0, 0x40000000);
+			if (constantValue == lsnsLife3Value)
 			{
 				seenLsnsLife3 = true;
 			}
 			presentSource(nodeIndex, 0);
 		}
 		checkRange(seenLsnsLife3 ? 1 : 0, 1, 2);
+		tree.inputStorageSlots.resize(tree.inputCount);
 		for (int32_t inputIndex = 0; inputIndex < tree.inputCount; ++inputIndex)
 		{
 			auto nodeIndex = tree.constantCount + inputIndex;
 			auto &input = tree.nodes[nodeIndex];
 			input.type = Node::input;
+			auto &inputStorageSlots = tree.inputStorageSlots[inputIndex];
+			stream >> inputStorageSlots >> CheckCin();
+			checkRange(inputStorageSlots, 0, tree.storageSlots);
 			presentSource(nodeIndex, 0);
 		}
 		for (int32_t compositeIndex = 0; compositeIndex < tree.compositeCount; ++compositeIndex)
@@ -1462,7 +1484,7 @@ namespace
 			}
 			else if (auto *cload = std::get_if<Plan::Cload>(&step))
 			{
-				stream << " " << cload->workSlot << " " << cload->storageSlot;
+				stream << " " << cload->workSlot;
 			}
 			else if (auto *mode = std::get_if<Plan::Mode>(&step))
 			{

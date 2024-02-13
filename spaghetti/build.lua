@@ -172,7 +172,11 @@ local function lift(outputs, transform)
 	return lifted_outputs
 end
 
-local function fold_equivalent(outputs)
+local function fold_equivalent(outputs, inputs)
+	local expr_to_input_index = {}
+	for index, expr in pairs(inputs) do
+		expr_to_input_index[expr] = index
+	end
 	local function get_constant_value(expr)
 		return bit.bor(expr.keepalive_, expr.payload_)
 	end
@@ -231,6 +235,7 @@ local function fold_equivalent(outputs)
 			end
 		end
 		new_expr.user_node_ = expr
+		new_expr.input_index_ = expr_to_input_index[expr] or false
 		return { {
 			node         = new_expr,
 			output_index = 1,
@@ -316,7 +321,7 @@ local function flatten_selects(outputs)
 	end)
 end
 
-local function preprocess_tree(output_keys)
+local function preprocess_tree(output_keys, inputs)
 	local outputs = {}
 	for key in pairs(output_keys) do
 		table.insert(outputs, {
@@ -324,7 +329,7 @@ local function preprocess_tree(output_keys)
 			output_index = 1,
 		})
 	end
-	outputs = fold_equivalent(outputs)
+	outputs = fold_equivalent(outputs, inputs)
 	outputs = flatten_selects(outputs)
 	return outputs
 end
@@ -372,10 +377,10 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 		end
 		return true
 	end
+	ts_down(output_keys, prepare_expr)
 	if not seen_life_3 then
 		prepare_expr(user_node.make_constant_(LSNS_LIFE_3, 0))
 	end
-	ts_down(output_keys, prepare_expr)
 	local type_order = {
 		constant  = 1,
 		input     = 2,
@@ -415,6 +420,10 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 	io.stdout:write(("%i %i %i %i\n"):format(#constants, #inputs, #composites, #outputs))
 	for _, expr in ipairs(constants) do
 		io.stdout:write(("%i "):format(constant_value(expr)))
+	end
+	io.stdout:write("\n")
+	for _, expr in ipairs(inputs) do
+		io.stdout:write(("%i "):format(expr.input_index_ - 1))
 	end
 	io.stdout:write("\n")
 	for _, expr in ipairs(composites) do
@@ -459,11 +468,12 @@ local function build(info)
 		info = check_info(info)
 		check_zeroness(info.output_keys)
 		check_connectivity(info.output_keys, info.inputs)
-		local outputs = preprocess_tree(info.output_keys)
+		local outputs = preprocess_tree(info.output_keys, info.inputs)
 		construct_layout(info.stacks, info.storage_slots, info.work_slots, outputs, info.on_progress)
 	end)
 end
 
 return strict.make_mt_one("spaghetti.build", {
-	build = build,
+	build       = build,
+	LSNS_LIFE_3 = LSNS_LIFE_3,
 })
