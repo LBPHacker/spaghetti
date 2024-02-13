@@ -144,6 +144,7 @@ local function check_info(info)
 		storage_slots = info.storage_slots,
 		work_slots    = info.work_slots,
 		inputs        = info.inputs,
+		output_slots  = info.outputs,
 		output_keys   = misc.values_to_keys(info.outputs),
 		on_progress   = info.on_progress,
 		clobbers      = clobbers,
@@ -172,10 +173,17 @@ local function lift(outputs, transform)
 	return lifted_outputs
 end
 
-local function fold_equivalent(outputs, inputs)
+local function fold_equivalent(outputs, output_slots, inputs)
 	local expr_to_input_index = {}
 	for index, expr in pairs(inputs) do
 		expr_to_input_index[expr] = index
+	end
+	local expr_to_output_slots = {}
+	for slot, expr in pairs(output_slots) do
+		if not expr_to_output_slots[expr] then
+			expr_to_output_slots[expr] = {}
+		end
+		table.insert(expr_to_output_slots[expr], slot)
 	end
 	local function get_constant_value(expr)
 		return bit.bor(expr.keepalive_, expr.payload_)
@@ -184,6 +192,7 @@ local function fold_equivalent(outputs, inputs)
 	local function get_constant(value)
 		if not constants[value] then
 			local constant = user_node.make_constant_(value)
+			constant.output_slots_ = { {} }
 			constant.label_ = ("%08X"):format(value)
 			constants[value] = constant
 		end
@@ -211,6 +220,7 @@ local function fold_equivalent(outputs, inputs)
 		for key, value in pairs(expr) do
 			new_expr[key] = value
 		end
+		new_expr.output_slots_ = { {} }
 		if expr.type_ == "constant" then
 			new_expr = get_constant(get_constant_value(expr))
 		elseif expr.type_ == "composite" then
@@ -236,9 +246,12 @@ local function fold_equivalent(outputs, inputs)
 		end
 		new_expr.user_node_ = expr
 		new_expr.input_index_ = expr_to_input_index[expr] or false
+		for _, slot in ipairs(expr_to_output_slots[expr] or {}) do
+			table.insert(new_expr.output_slots_[1], slot)
+		end
 		return { {
-			node         = new_expr,
-			output_index = 1,
+			node             = new_expr,
+			output_index     = 1,
 		} }
 	end)
 end
@@ -251,6 +264,8 @@ local function flatten_selects(outputs)
 			new_expr[key] = value
 		end
 		local new_output_index = 1
+		new_expr.output_slots_ = { {} }
+		local output_slots_handled = false
 		if expr.type_ == "composite" then
 			new_expr.params_ = {}
 			if expr.info_.method == "select" then
@@ -297,6 +312,11 @@ local function flatten_selects(outputs)
 						new_expr.output_count_ = new_expr.output_count_ + 1
 						insert(merged_info.lanes * 2 - 1, ("lane_%i_vzero"):format(merged_info.lanes), get_lifted(lane_expr.params_.vzero))
 						insert(merged_info.lanes * 2 - 1, ("lane_%i_vnonzero"):format(merged_info.lanes), get_lifted(lane_expr.params_.vnonzero))
+						local output_slots = {}
+						for _, slot in ipairs(lane_expr.output_slots_[1]) do
+							table.insert(output_slots, slot)
+						end
+						new_expr.output_slots_[new_expr.output_count_] = output_slots
 						return new_expr.output_count_
 					end
 					lifted_select_groups[select_group] = {
@@ -307,21 +327,27 @@ local function flatten_selects(outputs)
 				local lifted_select_group = lifted_select_groups[select_group]
 				new_expr = lifted_select_group.expr
 				new_output_index = lifted_select_group.add_lane(expr)
+				output_slots_handled = true
 			else
 				for index, name in pairs(expr.info_.params) do
 					new_expr.params_[name] = get_lifted(expr.params_[name])
 				end
 			end
 		end
+		if not output_slots_handled then
+			for _, slot in ipairs(expr.output_slots_[1]) do
+				table.insert(new_expr.output_slots_[1], slot)
+			end
+		end
 		new_expr.user_node_ = expr.user_node_
 		return { {
-			node         = new_expr,
-			output_index = new_output_index,
+			node             = new_expr,
+			output_index     = new_output_index,
 		} }
 	end)
 end
 
-local function preprocess_tree(output_keys, inputs)
+local function preprocess_tree(output_keys, output_slots, inputs)
 	local outputs = {}
 	for key in pairs(output_keys) do
 		table.insert(outputs, {
@@ -329,7 +355,7 @@ local function preprocess_tree(output_keys, inputs)
 			output_index = 1,
 		})
 	end
-	outputs = fold_equivalent(outputs, inputs)
+	outputs = fold_equivalent(outputs, output_slots, inputs)
 	outputs = flatten_selects(outputs)
 	return outputs
 end
@@ -457,8 +483,14 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 			io.stdout:write("\n")
 		end
 	end
+	local source_index_to_output_slots = {}
 	for _, param in ipairs(outputs) do
-		io.stdout:write(("%i "):format(param_to_index(param)))
+		source_index_to_output_slots[param_to_index(param)] = param.node.output_slots_[param.output_index]
+	end
+	for source_index, output_slots in pairs(source_index_to_output_slots) do
+		for _, output_slot in ipairs(output_slots) do
+			io.stdout:write(("%i %i "):format(source_index, output_slot - 1))
+		end
 	end
 	io.stdout:write("\n")
 end
@@ -468,7 +500,7 @@ local function build(info)
 		info = check_info(info)
 		check_zeroness(info.output_keys)
 		check_connectivity(info.output_keys, info.inputs)
-		local outputs = preprocess_tree(info.output_keys, info.inputs)
+		local outputs = preprocess_tree(info.output_keys, info.output_slots, info.inputs)
 		construct_layout(info.stacks, info.storage_slots, info.work_slots, outputs, info.on_progress)
 	end)
 end

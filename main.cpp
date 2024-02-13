@@ -233,6 +233,12 @@ namespace
 		std::vector<Tmp> tmps;
 		std::vector<int32_t> constantValues;
 		std::vector<int32_t> inputStorageSlots;
+		struct OutputLink
+		{
+			int32_t sourceIndex;
+			int32_t storageSlot;
+		};
+		std::vector<OutputLink> outputLinks;
 		std::vector<Source> sources;
 
 		double storageSlotOverheadPenalty;
@@ -603,6 +609,8 @@ namespace
 			>;
 			std::vector<Step> steps;
 
+			bool outputRemapFailed = false;
+
 			void SortSteps()
 			{
 				std::sort(steps.begin(), steps.end(), [](auto &lhs, auto &rhs) {
@@ -681,6 +689,10 @@ namespace
 
 			std::optional<Plan> ToPlan() const
 			{
+				if (outputRemapFailed)
+				{
+					return std::nullopt;
+				}
 				if (tree->storageSlots < storageSlotCount)
 				{
 					return std::nullopt;
@@ -820,20 +832,41 @@ namespace
 		EnergyType GetEnergy() const
 		{
 			EnergyType energy;
+			struct OutputRemap
+			{
+				int32_t from, to;
+			};
+			std::vector<OutputRemap> outputRemaps;
 			auto nodeIndexToLayerIndex = NodeIndexToLayerIndex();
 			struct Storage
 			{
 				int32_t usesLeft = 0;
 				int32_t slotIndex = -1;
+				std::vector<int32_t> outputLinks;
 			};
 			std::vector<std::optional<int32_t>> slots;
 			std::vector<Storage> storage(tree->sources.size());
+			std::vector<int32_t> disallowConstantsInSlots(tree->workSlots, 0); // std::vector<bool> is stupid
+			for (auto &outputLink : tree->outputLinks)
+			{
+				storage[outputLink.sourceIndex].outputLinks.push_back(outputLink.storageSlot);
+				disallowConstantsInSlots[outputLink.storageSlot] = 1;
+			}
 			auto allocStorage = [
 				this,
+				&outputRemaps,
 				&energy,
 				&storage,
+				&disallowConstantsInSlots,
 				&slots
 			](int32_t layerIndex, int32_t sourceIndex, bool forConstant, std::optional<int32_t> freeSlotIndex) {
+				for (auto slotIndex : storage[sourceIndex].outputLinks)
+				{
+					if (!*freeSlotIndex && !slots[slotIndex])
+					{
+						freeSlotIndex = slotIndex;
+					}
+				}
 				if (freeSlotIndex)
 				{
 					auto minSize = *freeSlotIndex + 1;
@@ -842,30 +875,45 @@ namespace
 						slots.resize(minSize);
 					}
 				}
+				auto slotOk = [&slots, &disallowConstantsInSlots, forConstant](int32_t slotIndex) {
+					return !slots[slotIndex] && !(forConstant && slotIndex < int32_t(disallowConstantsInSlots.size()) && disallowConstantsInSlots[slotIndex]);
+				};
 				if (!freeSlotIndex)
 				{
 					for (int32_t slotIndex = 0; slotIndex < int32_t(slots.size()); ++slotIndex)
 					{
-						if (!slots[slotIndex])
+						if (slotOk(slotIndex))
 						{
 							freeSlotIndex = slotIndex;
 							break;
 						}
 					}
 				}
-				if (!freeSlotIndex)
+				while (!freeSlotIndex)
 				{
-					freeSlotIndex = slots.size();
+					auto tryNext = slots.size();
 					slots.emplace_back();
+					if (slotOk(tryNext))
+					{
+						freeSlotIndex = tryNext;
+					}
 				}
 				assert(!slots[*freeSlotIndex]);
-				slots[*freeSlotIndex] = sourceIndex;
+				slots[*freeSlotIndex] = sourceIndex; // outputRemaps
+				for (auto slotIndex : storage[sourceIndex].outputLinks)
+				{
+					if (slotIndex != *freeSlotIndex)
+					{
+						outputRemaps.push_back({ *freeSlotIndex, slotIndex });
+					}
+				}
 				auto uses = tree->sources[sourceIndex].uses;
 				if (forConstant)
 				{
 					uses = -1; // constants have infinite uses
 				}
-				storage[sourceIndex] = { uses, *freeSlotIndex };
+				storage[sourceIndex].usesLeft = uses;
+				storage[sourceIndex].slotIndex = *freeSlotIndex;
 				if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 				{
 					energy.steps.push_back(EnergyWithPlan::AllocStorage{ layerIndex, sourceIndex, *freeSlotIndex, uses });
@@ -921,14 +969,6 @@ namespace
 					std::optional<int32_t> cworkSlotIndex;
 				};
 				std::vector<StoreScheduleEntry> storeSchedule;
-				// auto doStore = [&storeSchedule](int32_t workSlotIndex, int32_t sourceIndex) {
-				// 	auto storeScheduleIndex = int32_t(storeSchedule.size());
-				// 	storeSchedule.push_back({ sourceIndex, workSlotIndex });
-				// 	return storeScheduleIndex;
-				// };
-				// auto doCstore = [&storeSchedule](int32_t workSlotIndex, int32_t storeScheduleIndex) {
-				// 	storeSchedule[storeScheduleIndex].cworkSlotIndex = workSlotIndex;
-				// };
 				auto toSelectZeroLinkToSourceIndex = [this](const Link &link) {
 					auto &node = tree->nodes[link.directions[linkDownstream].nodeIndex];
 					auto laneIndex = (link.directions[linkDownstream].linkIndicesIndex - 1) / 2;
@@ -1119,6 +1159,24 @@ namespace
 			energy.tree = tree;
 			if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 			{
+				if (int32_t(outputRemaps.size()) > tree->workSlots)
+				{
+					// TODO: figure something out for this
+					std::cerr << "WARNING: failing output remapping because there are more ill-mapped outputs than work slots" << std::endl;
+					energy.outputRemapFailed = true;
+				}
+				else if (outputRemaps.size())
+				{
+					auto layerIndex = int32_t(layers.size()) - 1;
+					energy.steps.push_back(EnergyWithPlan::Mode{ layerIndex, 0, 0 });
+					for (int32_t outputRemapIndex = 0; outputRemapIndex < int32_t(outputRemaps.size()); ++outputRemapIndex)
+					{
+						auto &outputRemap = outputRemaps[outputRemapIndex];
+						energy.steps.push_back(EnergyWithPlan::Load{ layerIndex, -1, 0, outputRemapIndex, outputRemap.from });
+						energy.steps.push_back(EnergyWithPlan::Store{ layerIndex, outputRemapIndex, outputRemap.to });
+					}
+					energy.steps.push_back(EnergyWithPlan::Commit{ layerIndex });
+				}
 				energy.SortSteps();
 			}
 			return energy;
@@ -1225,9 +1283,9 @@ namespace
 			auto nodeIndex = tree.constantCount + inputIndex;
 			auto &input = tree.nodes[nodeIndex];
 			input.type = Node::input;
-			auto &inputStorageSlots = tree.inputStorageSlots[inputIndex];
-			stream >> inputStorageSlots >> CheckCin();
-			checkRange(inputStorageSlots, 0, tree.storageSlots);
+			auto &inputStorageSlot = tree.inputStorageSlots[inputIndex];
+			stream >> inputStorageSlot >> CheckCin();
+			checkRange(inputStorageSlot, 0, tree.storageSlots);
 			presentSource(nodeIndex, 0);
 		}
 		for (int32_t compositeIndex = 0; compositeIndex < tree.compositeCount; ++compositeIndex)
@@ -1290,13 +1348,16 @@ namespace
 				presentSource(nodeIndex, 0);
 			}
 		}
+		tree.outputLinks.resize(tree.outputCount);
 		for (int32_t outputIndex = 0; outputIndex < tree.outputCount; ++outputIndex)
 		{
 			auto nodeIndex = tree.constantCount + tree.inputCount + tree.compositeCount + outputIndex;
 			auto &node = tree.nodes[nodeIndex];
-			int32_t outputSource;
-			stream >> outputSource >> CheckCin();
+			auto &outputSource = tree.outputLinks[outputIndex].sourceIndex;
+			auto &outputStorageSlot = tree.outputLinks[outputIndex].storageSlot;
+			stream >> outputSource >> outputStorageSlot >> CheckCin();
 			checkRange(outputSource, 0, tree.sources.size());
+			checkRange(outputStorageSlot, 0, tree.storageSlots);
 			node.type = Node::output;
 			link(node, outputSource, Link::toOutput);
 		}
