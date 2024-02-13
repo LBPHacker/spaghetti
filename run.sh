@@ -4,4 +4,4 @@ set -euo pipefail
 IFS=$'\t\n'
 
 ninja
-(cd .. && ./examples/ks.lua) | ./main
+(cd .. && ./examples/ks.lua) | tee /dev/stderr | ./main

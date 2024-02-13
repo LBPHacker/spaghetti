@@ -103,6 +103,7 @@ namespace
 
 	struct Tmp
 	{
+		int32_t value;
 		bool commutative;
 	};
 
@@ -216,6 +217,8 @@ namespace
 		>;
 		std::vector<Step> steps;
 		int32_t cost = 0;
+		int32_t stackCount;
+		std::vector<int32_t> tmps;
 
 		static constexpr auto commitCost = Aray::cost + East::cost + West::cost + Clear::cost;
 	};
@@ -663,12 +666,16 @@ namespace
 				{
 					return std::nullopt;
 				}
-				constexpr int32_t stackMaxCost    = 1495;
-				constexpr auto bottomTopCost      = Plan::Bottom::cost + Plan::Top::cost;
-				constexpr auto stackLayersMaxCost = stackMaxCost - bottomTopCost;
+				constexpr int32_t stackMaxCost       = 1495;
+				constexpr auto    bottomTopCost      = Plan::Bottom::cost + Plan::Top::cost;
+				constexpr auto    stackLayersMaxCost = stackMaxCost - bottomTopCost;
 				Plan plan;
+				for (auto &tmp : tree->tmps)
+				{
+					plan.tmps.push_back(tmp.value);
+				}
 				int32_t lsnsLife3Index = -1;
-				std::vector<int32_t> constantValue(tree->storageSlots, -1);
+				std::vector<int32_t> constantValue(tree->storageSlots, 0);
 				for (auto &step : steps)
 				{
 					if (auto *constant = std::get_if<Constant>(&step))
@@ -780,6 +787,7 @@ namespace
 						plan.cost += step.cost;
 					}, step);
 				}
+				plan.stackCount = stackIndex;
 				return plan;
 			}
 		};
@@ -1096,9 +1104,11 @@ namespace
 		tree.tmps.resize(tmpCount);
 		for (auto &tmp : tree.tmps)
 		{
-			stream >> tmp.commutative >> CheckCin();
+			stream >> tmp.value >> tmp.commutative >> CheckCin();
+			checkRange(tmp.value, 1, 12);
+			checkRange(tmp.commutative, 0, 2);
 		}
-		tree.tmps.insert(tree.tmps.begin(), { false });
+		tree.tmps.insert(tree.tmps.begin(), { 0, false });
 		stream >> tree.storageSlotOverheadPenalty;
 		stream >> tree.constantCount >> tree.inputCount >> tree.compositeCount >> tree.outputCount >> CheckCin();
 		checkRange(tree.constantCount, 0, bigNumber);
@@ -1340,13 +1350,13 @@ namespace
 				}
 				else if (auto *load = std::get_if<State::EnergyWithPlan::Load>(&step))
 				{
-					workSlotStates[load->workSlot].tmp = load->tmp;
+					workSlotStates[load->workSlot].tmp = state.tree->tmps[load->tmp].value;
 					workSlotStates[load->workSlot].loadedFrom = load->storageSlot;
 					workSlotStates[load->workSlot].nodeIndex = load->nodeIndex;
 				}
 				else if (auto *cload = std::get_if<State::EnergyWithPlan::Cload>(&step))
 				{
-					workSlotStates[cload->workSlot].tmp = cload->tmp;
+					workSlotStates[cload->workSlot].tmp = state.tree->tmps[cload->tmp].value;
 					workSlotStates[cload->workSlot].cloadedFrom = cload->storageSlot;
 					workSlotStates[cload->workSlot].nodeIndex = cload->nodeIndex;
 				}
@@ -1373,12 +1383,12 @@ namespace
 					if (workSlotState.cloadedFrom)
 					{
 						stream << std::setw(2) << *workSlotState.cloadedFrom;
-						stream << "/" << std::setw(1) << *workSlotState.tmp << ">>";
+						stream << "/" << std::setw(1) << std::hex << std::uppercase << *workSlotState.tmp << std::dec << ">>";
 					}
 					if (workSlotState.loadedFrom)
 					{
 						stream << std::setw(2) << *workSlotState.loadedFrom;
-						stream << "/" << std::setw(1) << *workSlotState.tmp << "->";
+						stream << "/" << std::setw(1) << std::hex << std::uppercase << *workSlotState.tmp << std::dec << "->";
 					}
 					stream << std::setw(3) << state.tree->nodes[*workSlotState.nodeIndex].sources[0];
 				}
@@ -1439,7 +1449,7 @@ namespace
 
 	std::ostream &operator <<(std::ostream &stream, const Plan &plan)
 	{
-		stream << plan.steps.size() << " " << plan.cost << std::endl;
+		stream << plan.stackCount << " " << plan.steps.size() << " " << plan.cost << std::endl;
 		for (auto &step : plan.steps)
 		{
 			std::visit([&stream](auto &step) {
@@ -1456,7 +1466,7 @@ namespace
 			}
 			else if (auto *mode = std::get_if<Plan::Mode>(&step))
 			{
-				stream << " " << mode->tmp;
+				stream << " " << plan.tmps[mode->tmp];
 			}
 			else if (auto *store = std::get_if<Plan::Store>(&step))
 			{
@@ -1486,9 +1496,10 @@ namespace
 
 int main()
 {
-	constexpr auto tempInit = 1.0;
-	constexpr auto tempFini = 0.8;
-	constexpr auto tempLoss = 1e-7;
+	constexpr auto    tempInit          = 1.0;
+	constexpr auto    tempFini          = 0.8;
+	constexpr auto    tempLoss          = 1e-7;
+	constexpr int32_t dumpStateInterval = 100000;
 	std::random_device rd;
 	std::mt19937_64 rng(rd());
 	std::uniform_real_distribution<double> rdist(0.0, 1.0);
@@ -1508,7 +1519,7 @@ int main()
 			state = std::move(newState);
 		}
 		count += 1;
-		if (count == 100000)
+		if (count == dumpStateInterval)
 		{
 			count = 0;
 			std::cerr << state;

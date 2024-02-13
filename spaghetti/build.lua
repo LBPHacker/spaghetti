@@ -408,7 +408,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 	end
 	io.stdout:write(("%i %i %i\n"):format(#index_to_filt_tmp, max_work_slots, storage_slots))
 	for i = 1, #index_to_filt_tmp do
-		io.stdout:write(("%i "):format(filt_tmps[index_to_filt_tmp[i]].commutative and 1 or 0))
+		io.stdout:write(("%i %i "):format(index_to_filt_tmp[i], filt_tmps[index_to_filt_tmp[i]].commutative and 1 or 0))
 	end
 	io.stdout:write("\n")
 	io.stdout:write(("%f\n"):format(storage_slot_overhead_penalty))
