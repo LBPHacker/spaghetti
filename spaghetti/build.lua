@@ -431,16 +431,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 			return expr_to_index[param.node] + param.output_index - 2
 		end
 	end
-	local index_to_filt_tmp = {}
-	local filt_tmp_to_index = {}
-	for key in pairs(filt_tmps) do
-		table.insert(index_to_filt_tmp, key)
-		filt_tmp_to_index[key] = #index_to_filt_tmp
-	end
-	io.stdout:write(("%i %i %i\n"):format(#index_to_filt_tmp, max_work_slots, storage_slots))
-	for i = 1, #index_to_filt_tmp do
-		io.stdout:write(("%i %i "):format(index_to_filt_tmp[i], filt_tmps[index_to_filt_tmp[i]].commutative and 1 or 0))
-	end
+	io.stdout:write(("%i %i\n"):format(max_work_slots, storage_slots))
 	io.stdout:write("\n")
 	io.stdout:write(("%f\n"):format(storage_slot_overhead_penalty))
 	io.stdout:write(("%i %i %i %i\n"):format(#constants, #inputs, #composites, #outputs))
@@ -458,13 +449,13 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 		end
 		if expr.info_.method == "filt_tmp" then
 			io.stdout:write(("%i %i %i\n"):format(
-				filt_tmp_to_index[expr.info_.filt_tmp] - 1,
+				expr.info_.filt_tmp,
 				get_expr_index(1),
 				get_expr_index(2)
 			))
 		else
 			io.stdout:write(("%i %i %i"):format(
-				#index_to_filt_tmp,
+				12,
 				expr.info_.lanes,
 				expr.info_.stages
 			))
@@ -476,7 +467,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 			end
 			for j = 1, expr.info_.stages do
 				if j > 1 then
-					io.stdout:write((" %i"):format(filt_tmp_to_index[expr.info_.filt_tmps[j]] - 1))
+					io.stdout:write((" %i"):format(expr.info_.filt_tmps[j]))
 				end
 				io.stdout:write((" %i"):format(get_expr_index(expr.info_.lanes * 2 + j)))
 			end

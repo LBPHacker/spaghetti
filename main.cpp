@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <random>
 #include <variant>
@@ -11,25 +12,6 @@
 
 namespace
 {
-	struct CheckCin
-	{
-		int errAt;
-
-		CheckCin(int newErrAt) : errAt(newErrAt)
-		{
-		}
-	};
-	std::istream &operator >>(std::istream &stream, const CheckCin &checkCin)
-	{
-		if (!stream)
-		{
-			std::cerr << "failed CheckCin at line " << checkCin.errAt << std::endl;
-			exit(1);
-		}
-		return stream;
-	}
-#define CheckCin() CheckCin(__LINE__)
-
 	static void checkRange(int32_t v, int32_t l, int32_t h, int errAt)
 	{
 		if (v < l || v >= h)
@@ -52,6 +34,8 @@ namespace
 		std::vector<int32_t> nodeIndices;
 		int32_t workSlotsUsed;
 	};
+
+	std::array<int32_t, 12> tmpCommutativity = {{ 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0 }};
 
 	struct Link
 	{
@@ -98,12 +82,6 @@ namespace
 	{
 		int32_t nodeIndex = -1;
 		int32_t layerIndex2 = -1;
-	};
-
-	struct Tmp
-	{
-		int32_t value;
-		bool commutative;
 	};
 
 	struct State;
@@ -220,7 +198,9 @@ namespace
 		static constexpr auto commitCost = Aray::cost + East::cost + West::cost + Clear::cost;
 	};
 
-	struct Tree
+	constexpr int32_t lsnsLife3Value  = 0x10000003;
+
+	struct Design
 	{
 		int32_t workSlots;
 		int32_t storageSlots;
@@ -230,7 +210,6 @@ namespace
 		int32_t outputCount;
 		std::vector<Node> nodes;
 		std::vector<Link> links;
-		std::vector<Tmp> tmps;
 		std::vector<int32_t> constantValues;
 		std::vector<int32_t> inputStorageSlots;
 		struct OutputLink
@@ -298,7 +277,7 @@ namespace
 								auto laneCount = int32_t(linkedNode.sources.size());
 								lhsIndex += laneCount * 2;
 							}
-							if (link.directions[linkDownstream].linkIndicesIndex == lhsIndex && !tmps[linkedNode.tmps[0]].commutative)
+							if (link.directions[linkDownstream].linkIndicesIndex == lhsIndex && !tmpCommutativity[linkedNode.tmps[0]])
 							{
 								// binary same-layer link to lhs of non-commutative node
 								return std::nullopt;
@@ -335,15 +314,184 @@ namespace
 			// needs too many work slots
 			return std::nullopt;
 		}
-	};
 
-	constexpr int32_t lsnsLife3Value  = 0x10000003;
+		Design() = default;
+
+		struct ProtoOutputLink
+		{
+			int32_t source;
+			int32_t storageSlot;
+		};
+		struct ProtoBinary
+		{
+			int32_t tmp;
+			int32_t lhsSource, rhsSource;
+		};
+		struct ProtoSelect
+		{
+			std::vector<int32_t> tmps;
+			std::vector<int32_t> sources;
+		};
+		using ProtoComposite = std::variant<
+			ProtoBinary,
+			ProtoSelect
+		>;
+		Design(
+			int32_t newWorkSlots,
+			int32_t newStorageSlots,
+			double newStorageSlotOverheadPenalty,
+			std::vector<int32_t> newConstantValues,
+			std::vector<int32_t> newInputStorageSlots,
+			std::vector<ProtoComposite> newComposites,
+			std::vector<ProtoOutputLink> newOutputLinks
+		)
+		{
+			constexpr int32_t bigNumber = 10000;
+			constantCount = newConstantValues.size();
+			workSlots = newWorkSlots;
+			storageSlots = newStorageSlots;
+			storageSlotOverheadPenalty = newStorageSlotOverheadPenalty;
+			inputCount = newInputStorageSlots.size();
+			compositeCount = newComposites.size();
+			outputCount = newOutputLinks.size();
+			checkRange(workSlots, 2, bigNumber);
+			checkRange(storageSlots, 1, bigNumber);
+			checkRange(constantCount, 0, bigNumber);
+			checkRange(inputCount, 1, bigNumber);
+			checkRange(compositeCount, 1, bigNumber);
+			checkRange(outputCount, 1, bigNumber);
+			checkRange(inputCount + constantCount, 0, storageSlots + 1);
+			checkRange(outputCount + constantCount, 0, storageSlots + 1);
+			constantValues.resize(constantCount);
+			nodes.resize(constantCount + inputCount + compositeCount + outputCount);
+			auto link = [this](Node &node, int32_t sourceIndex, Link::LinkType linkType) {
+				auto &source = sources[sourceIndex];
+				source.uses += 1;
+				auto nodeIndex = source.nodeIndex;
+				auto &linkedNode = nodes[nodeIndex];
+				auto linkIndex = links.size();
+				Link &link = links.emplace_back();
+				link.type = linkType;
+				link.directions[linkUpstream].nodeIndex = nodeIndex;
+				link.directions[linkDownstream].nodeIndex = &node - &nodes[0];
+				link.directions[linkUpstream].linkIndicesIndex = linkedNode.linkIndices[linkDownstream].size();
+				link.directions[linkDownstream].linkIndicesIndex = node.linkIndices[linkUpstream].size();
+				link.upstreamOutputIndex = source.outputIndex;
+				linkedNode.linkIndices[linkDownstream].push_back(linkIndex);
+				node.linkIndices[linkUpstream].push_back(linkIndex);
+			};
+			auto presentSource = [this](int32_t nodeIndex, int32_t outputIndex) {
+				nodes[nodeIndex].sources.push_back(int32_t(sources.size()));
+				sources.push_back({ nodeIndex, outputIndex });
+			};
+			auto seenLsnsLife3 = false;
+			for (int32_t constantIndex = 0; constantIndex < constantCount; ++constantIndex)
+			{
+				auto nodeIndex = constantIndex;
+				auto &constant = nodes[nodeIndex];
+				constant.type = Node::constant;
+				auto &constantValue = constantValues[constantIndex];
+				constantValue = newConstantValues[constantIndex];
+				checkRange(constantValue, 0, 0x40000000);
+				if (constantValue == lsnsLife3Value)
+				{
+					seenLsnsLife3 = true;
+				}
+				presentSource(nodeIndex, 0);
+			}
+			checkRange(seenLsnsLife3 ? 1 : 0, 1, 2);
+			inputStorageSlots.resize(inputCount);
+			for (int32_t inputIndex = 0; inputIndex < inputCount; ++inputIndex)
+			{
+				auto nodeIndex = constantCount + inputIndex;
+				auto &input = nodes[nodeIndex];
+				input.type = Node::input;
+				auto &inputStorageSlot = inputStorageSlots[inputIndex];
+				inputStorageSlot = newInputStorageSlots[inputIndex];
+				checkRange(inputStorageSlot, 0, storageSlots);
+				presentSource(nodeIndex, 0);
+			}
+			for (int32_t compositeIndex = 0; compositeIndex < compositeCount; ++compositeIndex)
+			{
+				auto &protoComposite = newComposites[compositeIndex];
+				auto nodeIndex = constantCount + inputCount + compositeIndex;
+				auto &node = nodes[nodeIndex];
+				if (auto *protoSelect = std::get_if<ProtoSelect>(&protoComposite))
+				{
+					node.type = Node::select;
+					auto stageCount = int32_t(protoSelect->tmps.size()) + 1;
+					auto laneCount2 = int32_t(protoSelect->sources.size()) - stageCount;
+					checkRange(laneCount2, 2, bigNumber);
+					checkRange(laneCount2 % 2, 0, 1);
+					auto laneCount = laneCount2 / 2;
+					checkRange(stageCount, 2, bigNumber);
+					node.workSlotsNeeded = stageCount + laneCount * 2;
+					checkRange(node.workSlotsNeeded, 1, workSlots + 1);
+					node.tmps.resize(stageCount - 1);
+					for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
+					{
+						auto nonzeroSource = protoSelect->sources[laneIndex * 2];
+						auto zeroSource = protoSelect->sources[laneIndex * 2 + 1];
+						checkRange(nonzeroSource, 0, sources.size());
+						checkRange(zeroSource, 0, sources.size());
+						link(node, nonzeroSource, Link::toSelectNonzero);
+						link(node, zeroSource, Link::toSelectZero);
+					}
+					for (int32_t stageIndex = 0; stageIndex < stageCount; ++stageIndex)
+					{
+						if (stageIndex > 0)
+						{
+							auto tmp = protoSelect->tmps[stageIndex - 1];
+							checkRange(tmp, 0, tmpCommutativity.size());
+							node.tmps[stageIndex - 1] = tmp;
+						}
+						auto source = protoSelect->sources[laneCount * 2 + stageIndex];
+						checkRange(source, 0, sources.size());
+						link(node, source, Link::toBinary);
+					}
+					for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
+					{
+						presentSource(nodeIndex, laneIndex);
+					}
+				}
+				else if (auto *protoBinary = std::get_if<ProtoBinary>(&protoComposite))
+				{
+					node.type = Node::binary;
+					node.tmps.resize(1);
+					node.tmps[0] = protoBinary->tmp;
+					auto rhsSource = protoBinary->rhsSource;
+					auto lhsSource = protoBinary->lhsSource;
+					checkRange(node.tmps[0], 0, tmpCommutativity.size());
+					checkRange(rhsSource, 0, sources.size());
+					checkRange(lhsSource, 0, sources.size());
+					link(node, rhsSource, Link::toBinary);
+					link(node, lhsSource, Link::toBinary);
+					node.workSlotsNeeded = 2;
+					presentSource(nodeIndex, 0);
+				}
+			}
+			outputLinks.resize(outputCount);
+			for (int32_t outputIndex = 0; outputIndex < outputCount; ++outputIndex)
+			{
+				auto nodeIndex = constantCount + inputCount + compositeCount + outputIndex;
+				auto &node = nodes[nodeIndex];
+				auto &outputSource = outputLinks[outputIndex].sourceIndex;
+				auto &outputStorageSlot = outputLinks[outputIndex].storageSlot;
+				outputSource = newOutputLinks[outputIndex].source;
+				outputStorageSlot = newOutputLinks[outputIndex].storageSlot;
+				checkRange(outputSource, 0, sources.size());
+				checkRange(outputStorageSlot, 0, storageSlots);
+				node.type = Node::output;
+				link(node, outputSource, Link::toOutput);
+			}
+		}
+	};
 
 	struct State
 	{
 		double temp;
 		int32_t iteration;
-		const Tree *tree{};
+		const Design *design{};
 		std::vector<int32_t> nodeIndices;
 		std::vector<int32_t> layers;
 
@@ -358,19 +506,19 @@ namespace
 			// we only have to figure out where within the layer it should be inserted
 			auto layerBegin = LayerBegins(layerIndex);
 			auto layerEnd = LayerBegins(layerIndex + 1);
-			auto &extraNode = tree->nodes[extraNodeIndex];
+			auto &extraNode = design->nodes[extraNodeIndex];
 			auto nodeIndicesCopy = std::vector(nodeIndices.begin() + layerBegin, nodeIndices.begin() + layerEnd);
 			// insert up front by default, or at the back if it's a select
 			int32_t insertAt = extraNode.type == Node::select ? nodeIndicesCopy.size() : 0;
 			for (int32_t nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
 			{
 				auto nodeIndex = nodeIndices[nodeIndicesIndex];
-				auto &node = tree->nodes[nodeIndex];
+				auto &node = design->nodes[nodeIndex];
 				for (auto dir = LinkDirection(0); dir < linkMax; dir = LinkDirection(int32_t(dir) + 1))
 				{
 					for (auto linkIndex : node.linkIndices[dir])
 					{
-						auto &link = tree->links[linkIndex];
+						auto &link = design->links[linkIndex];
 						if (link.type == Link::toBinary && link.directions[dir].nodeIndex == extraNodeIndex)
 						{
 							// due to the order assumption above, this runs in only one of the dir iterations
@@ -386,7 +534,7 @@ namespace
 
 		std::vector<int32_t> NodeIndexToLayerIndex() const
 		{
-			std::vector<int32_t> nodeIndexToLayerIndex(tree->nodes.size());
+			std::vector<int32_t> nodeIndexToLayerIndex(design->nodes.size());
 			for (int32_t layerIndex = 0; layerIndex < int32_t(layers.size()); ++layerIndex)
 			{
 				auto layerBegin = LayerBegins(layerIndex);
@@ -403,10 +551,10 @@ namespace
 		{
 			auto nodeIndexToLayerIndex = NodeIndexToLayerIndex();
 			std::vector<Move> moves;
-			for (int32_t compositeIndex = 0; compositeIndex < tree->compositeCount; ++compositeIndex)
+			for (int32_t compositeIndex = 0; compositeIndex < design->compositeCount; ++compositeIndex)
 			{
-				auto nodeIndex = tree->constantCount + tree->inputCount + compositeIndex;
-				auto &node = tree->nodes[nodeIndex];
+				auto nodeIndex = design->constantCount + design->inputCount + compositeIndex;
+				auto &node = design->nodes[nodeIndex];
 				auto currLayerIndex = nodeIndexToLayerIndex[nodeIndex];
 				// move it somewhere between before the first and after the last composite layers
 				std::array<int32_t, linkMax> newLayerIndex2Limit = {{ 1, int32_t(layers.size()) * 2 - 3 }};
@@ -417,7 +565,7 @@ namespace
 					auto sign = dir == linkUpstream ? 1 : -1;
 					for (auto linkIndex : node.linkIndices[dir])
 					{
-						auto &link = tree->links[linkIndex];
+						auto &link = design->links[linkIndex];
 						auto linkedNodeIndex = link.directions[dir].nodeIndex;
 						// don't move to layers that are beyond the closest neighbouring nodes
 						newLayerIndex2Limit[dir] = sign * std::max(sign * newLayerIndex2Limit[dir], sign * nodeIndexToLayerIndex[linkedNodeIndex] * 2);
@@ -435,7 +583,7 @@ namespace
 						continue;
 					}
 					// make sure we can move it to an existing layer
-					if (!(newLayerIndex2 & 1) && !bool(tree->CheckLayer(InsertNode(int32_t(newLayerIndex2 / 2), nodeIndex))))
+					if (!(newLayerIndex2 & 1) && !bool(design->CheckLayer(InsertNode(int32_t(newLayerIndex2 / 2), nodeIndex))))
 					{
 						continue;
 					}
@@ -464,7 +612,7 @@ namespace
 			auto move = moves[rng() % moves.size()];
 			State neighbour;
 			neighbour.iteration = iteration + 1;
-			neighbour.tree = tree;
+			neighbour.design = design;
 			neighbour.temp = newTemp;
 			auto nodeIndexToLayerIndex = NodeIndexToLayerIndex();
 			for (int32_t layerIndex2 = 0; layerIndex2 < int32_t(layers.size()) * 2; ++layerIndex2)
@@ -512,13 +660,13 @@ namespace
 					}
 				}
 			}
-			assert(neighbour.nodeIndices.size() == tree->nodes.size());
+			assert(neighbour.nodeIndices.size() == design->nodes.size());
 			return neighbour;
 		}
 
 		struct Energy
 		{
-			const Tree *tree{};
+			const Design *design{};
 			double linear;
 			int32_t storageSlotCount;
 			int32_t partCount = 0;
@@ -687,22 +835,38 @@ namespace
 				});
 			}
 
-			std::optional<Plan> ToPlan() const
+			struct ToPlanFailed : public std::runtime_error
+			{
+				using runtime_error::runtime_error;
+			};
+			struct OutputRemappingFailed : public ToPlanFailed
+			{
+				OutputRemappingFailed() : ToPlanFailed("output remapping failed")
+				{
+				}
+			};
+			struct StorageSlotBudgetExceeded : public ToPlanFailed
+			{
+				StorageSlotBudgetExceeded() : ToPlanFailed("storage slot budget exceeded")
+				{
+				}
+			};
+			Plan ToPlan() const
 			{
 				if (outputRemapFailed)
 				{
-					return std::nullopt;
+					throw OutputRemappingFailed();
 				}
-				if (tree->storageSlots < storageSlotCount)
+				if (design->storageSlots < storageSlotCount)
 				{
-					return std::nullopt;
+					throw StorageSlotBudgetExceeded();
 				}
 				constexpr int32_t stackMaxCost       = 1495;
 				constexpr auto    bottomTopCost      = Plan::Bottom::cost + Plan::Top::cost;
 				constexpr auto    stackLayersMaxCost = stackMaxCost - bottomTopCost;
 				Plan plan;
 				int32_t lsnsLife3Index = -1;
-				std::vector<int32_t> constantValue(tree->storageSlots, 0);
+				std::vector<int32_t> constantValue(design->storageSlots, 0);
 				for (auto &step : steps)
 				{
 					if (auto *constant = std::get_if<Constant>(&step))
@@ -776,11 +940,11 @@ namespace
 						pushToLayer(Plan::East{ stackIndex });
 					}
 				};
-				for (int32_t storageSlotIndex = 0; storageSlotIndex < tree->storageSlots; ++storageSlotIndex)
+				for (int32_t storageSlotIndex = 0; storageSlotIndex < design->storageSlots; ++storageSlotIndex)
 				{
 					plan.steps.push_back(Plan::Rfilt{ stackIndex, storageSlotIndex, constantValue[storageSlotIndex] });
 				}
-				for (int32_t workSlotIndex = 0; workSlotIndex < tree->workSlots; ++workSlotIndex)
+				for (int32_t workSlotIndex = 0; workSlotIndex < design->workSlots; ++workSlotIndex)
 				{
 					plan.steps.push_back(Plan::Lfilt{ stackIndex, workSlotIndex });
 				}
@@ -845,9 +1009,9 @@ namespace
 				std::vector<int32_t> outputLinks;
 			};
 			std::vector<std::optional<int32_t>> slots;
-			std::vector<Storage> storage(tree->sources.size());
-			std::vector<int32_t> disallowConstantsInSlots(tree->workSlots, 0); // std::vector<bool> is stupid
-			for (auto &outputLink : tree->outputLinks)
+			std::vector<Storage> storage(design->sources.size());
+			std::vector<int32_t> disallowConstantsInSlots(design->workSlots, 0); // std::vector<bool> is stupid
+			for (auto &outputLink : design->outputLinks)
 			{
 				storage[outputLink.sourceIndex].outputLinks.push_back(outputLink.storageSlot);
 				disallowConstantsInSlots[outputLink.storageSlot] = 1;
@@ -907,7 +1071,7 @@ namespace
 						outputRemaps.push_back({ *freeSlotIndex, slotIndex });
 					}
 				}
-				auto uses = tree->sources[sourceIndex].uses;
+				auto uses = design->sources[sourceIndex].uses;
 				if (forConstant)
 				{
 					uses = -1; // constants have infinite uses
@@ -938,22 +1102,22 @@ namespace
 				}
 				return slotIndex;
 			};
-			for (int32_t inputIndex = 0; inputIndex < tree->inputCount; ++inputIndex)
+			for (int32_t inputIndex = 0; inputIndex < design->inputCount; ++inputIndex)
 			{
-				auto nodeIndex = tree->constantCount + inputIndex;
-				auto &node = tree->nodes[nodeIndex];
+				auto nodeIndex = design->constantCount + inputIndex;
+				auto &node = design->nodes[nodeIndex];
 				auto sourceIndex = node.sources[0];
-				allocStorage(0, sourceIndex, false, tree->inputStorageSlots[inputIndex]);
+				allocStorage(0, sourceIndex, false, design->inputStorageSlots[inputIndex]);
 			}
-			for (int32_t constantIndex = 0; constantIndex < tree->constantCount; ++constantIndex)
+			for (int32_t constantIndex = 0; constantIndex < design->constantCount; ++constantIndex)
 			{
 				auto nodeIndex = constantIndex;
-				auto &node = tree->nodes[nodeIndex];
+				auto &node = design->nodes[nodeIndex];
 				auto sourceIndex = node.sources[0];
 				auto storageSlotIndex = allocStorage(0, sourceIndex, true, std::nullopt);
 				if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 				{
-					energy.steps.push_back(EnergyWithPlan::Constant{ 0, storageSlotIndex, tree->constantValues[constantIndex] });
+					energy.steps.push_back(EnergyWithPlan::Constant{ 0, storageSlotIndex, design->constantValues[constantIndex] });
 				}
 			}
 			if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
@@ -970,7 +1134,7 @@ namespace
 				};
 				std::vector<StoreScheduleEntry> storeSchedule;
 				auto toSelectZeroLinkToSourceIndex = [this](const Link &link) {
-					auto &node = tree->nodes[link.directions[linkDownstream].nodeIndex];
+					auto &node = design->nodes[link.directions[linkDownstream].nodeIndex];
 					auto laneIndex = (link.directions[linkDownstream].linkIndicesIndex - 1) / 2;
 					return std::pair<int32_t, int32_t>{ laneIndex, node.sources[laneIndex] };
 				};
@@ -994,7 +1158,7 @@ namespace
 					bool used;
 					std::vector<int32_t> slotUsed; // std::vector<bool> is stupid
 				};
-				std::vector<TmpLoad> tmpLoads(tree->tmps.size(), { false, std::vector<int32_t>(slots.size(), 0) });
+				std::vector<TmpLoad> tmpLoads(tmpCommutativity.size(), { false, std::vector<int32_t>(slots.size(), 0) });
 				auto doLoad = [this, &energy, &useStorage, &tmpLoads, layerIndex](int32_t nodeIndex, int32_t workSlotIndex, int32_t sourceIndex, int32_t tmp) {
 					auto storageSlotIndex = useStorage(layerIndex, sourceIndex);
 					if (!tmpLoads[tmp].used)
@@ -1002,7 +1166,7 @@ namespace
 						energy.partCount += Plan::Mode::cost;
 						if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 						{
-							energy.steps.push_back(EnergyWithPlan::Mode{ layerIndex, workSlotIndex, tree->tmps[tmp].value });
+							energy.steps.push_back(EnergyWithPlan::Mode{ layerIndex, workSlotIndex, tmp });
 						}
 						tmpLoads[tmp].used = true;
 					}
@@ -1011,7 +1175,7 @@ namespace
 						energy.partCount += Plan::Cload::cost;
 						if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 						{
-							energy.steps.push_back(EnergyWithPlan::Cload{ layerIndex, nodeIndex, tree->tmps[tmp].value, workSlotIndex, storageSlotIndex });
+							energy.steps.push_back(EnergyWithPlan::Cload{ layerIndex, nodeIndex, tmp, workSlotIndex, storageSlotIndex });
 						}
 					}
 					else
@@ -1020,14 +1184,14 @@ namespace
 						energy.partCount += Plan::Load::cost;
 						if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 						{
-							energy.steps.push_back(EnergyWithPlan::Load{ layerIndex, nodeIndex, tree->tmps[tmp].value, workSlotIndex, storageSlotIndex });
+							energy.steps.push_back(EnergyWithPlan::Load{ layerIndex, nodeIndex, tmp, workSlotIndex, storageSlotIndex });
 						}
 					}
 				};
 				auto layerBegin = LayerBegins(layerIndex);
 				auto layerEnd = LayerBegins(layerIndex + 1);
 				int32_t workSlotsUsed = 0;
-				auto &lastNode = tree->nodes[nodeIndices[layerEnd - 1]];
+				auto &lastNode = design->nodes[nodeIndices[layerEnd - 1]];
 				if (lastNode.type == Node::select)
 				{
 					selectStorageSlotSchedule.resize(lastNode.sources.size(), -1);
@@ -1035,7 +1199,7 @@ namespace
 				for (int32_t nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
 				{
 					auto nodeIndex = nodeIndices[nodeIndicesIndex];
-					auto &node = tree->nodes[nodeIndex];
+					auto &node = design->nodes[nodeIndex];
 					auto doLinkUpstream = [
 						this,
 						nodeIndex,
@@ -1048,11 +1212,11 @@ namespace
 						&toSelectZeroLinkToSourceIndex,
 						layerIndex
 					](int32_t linkIndicesIndex) {
-						auto &node = tree->nodes[nodeIndex];
+						auto &node = design->nodes[nodeIndex];
 						auto linkIndex = node.linkIndices[linkUpstream][linkIndicesIndex];
-						auto &link = tree->links[linkIndex];
+						auto &link = design->links[linkIndex];
 						auto linkedNodeIndex = link.directions[linkUpstream].nodeIndex;
-						auto &linkedNode = tree->nodes[linkedNodeIndex];
+						auto &linkedNode = design->nodes[linkedNodeIndex];
 						if (nodeIndexToLayerIndex[linkedNodeIndex] != layerIndex)
 						{
 							auto loadTmp = 0;
@@ -1066,7 +1230,7 @@ namespace
 							{
 								// grab stage 1 tmp if it's coming from the same layer
 								auto linkIndexNext = node.linkIndices[linkUpstream][linkIndicesIndex + 1];
-								auto &linkNext = tree->links[linkIndexNext];
+								auto &linkNext = design->links[linkIndexNext];
 								auto linkedNodeNextIndex = linkNext.directions[linkUpstream].nodeIndex;
 								if (nodeIndexToLayerIndex[linkedNodeNextIndex] == layerIndex)
 								{
@@ -1112,7 +1276,7 @@ namespace
 						auto needsStore = false;
 						for (auto linkIndex : node.linkIndices[linkDownstream])
 						{
-							auto &link = tree->links[linkIndex];
+							auto &link = design->links[linkIndex];
 							auto linkedNodeIndex = link.directions[linkDownstream].nodeIndex;
 							if (nodeIndexToLayerIndex[linkedNodeIndex] != layerIndex)
 							{
@@ -1153,16 +1317,14 @@ namespace
 				}
 			}
 			auto storageSlotCount = int32_t(slots.size());
-			auto storageSlotOverhead = std::max(0, storageSlotCount - tree->storageSlots);
-			energy.linear = double(energy.partCount) + double(storageSlotOverhead) * tree->storageSlotOverheadPenalty;
+			auto storageSlotOverhead = std::max(0, storageSlotCount - design->storageSlots);
+			energy.linear = double(energy.partCount) + double(storageSlotOverhead) * design->storageSlotOverheadPenalty;
 			energy.storageSlotCount = storageSlotCount;
-			energy.tree = tree;
+			energy.design = design;
 			if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 			{
-				if (int32_t(outputRemaps.size()) > tree->workSlots)
+				if (int32_t(outputRemaps.size()) > design->workSlots)
 				{
-					// TODO: figure something out for this
-					std::cerr << "WARNING: failing output remapping because there are more ill-mapped outputs than work slots" << std::endl;
 					energy.outputRemapFailed = true;
 				}
 				else if (outputRemaps.size())
@@ -1183,10 +1345,10 @@ namespace
 		}
 	};
 
-	State Tree::Initial(double newTemp) const
+	State Design::Initial(double newTemp) const
 	{
 		State state;
-		state.tree = this;
+		state.design = this;
 		state.iteration = 0;
 		state.temp = newTemp;
 		for (int32_t nodeIndex = 0; nodeIndex < int32_t(nodes.size()); ++nodeIndex)
@@ -1211,156 +1373,94 @@ namespace
 		return std::exp(-(newEnergy - energy) / temp);
 	}
 
-	std::istream &operator >>(std::istream &stream, Tree &tree)
+	struct StreamFailed : public std::runtime_error
 	{
-		constexpr int32_t bigNumber = 10000;
-		std::ios::sync_with_stdio(false);
-		int32_t tmpCount;
-		stream >> tmpCount >> tree.workSlots >> tree.storageSlots >> CheckCin();
-		checkRange(tmpCount, 1, bigNumber);
-		checkRange(tree.workSlots, 2, bigNumber);
-		checkRange(tree.storageSlots, 1, bigNumber);
-		tree.tmps.resize(tmpCount);
-		for (auto &tmp : tree.tmps)
+		using runtime_error::runtime_error;
+	};
+	struct CheckStream
+	{
+	};
+	std::istream &operator >>(std::istream &stream, const CheckStream &checkCin)
+	{
+		if (!stream)
 		{
-			stream >> tmp.value >> tmp.commutative >> CheckCin();
-			checkRange(tmp.value, 1, 12);
-			checkRange(tmp.commutative, 0, 2);
+			throw StreamFailed("stream failed");
 		}
-		tree.tmps.insert(tree.tmps.begin(), { 0, false });
-		stream >> tree.storageSlotOverheadPenalty;
-		stream >> tree.constantCount >> tree.inputCount >> tree.compositeCount >> tree.outputCount >> CheckCin();
-		checkRange(tree.constantCount, 0, bigNumber);
-		checkRange(tree.inputCount, 1, bigNumber);
-		checkRange(tree.compositeCount, 1, bigNumber);
-		checkRange(tree.outputCount, 1, bigNumber);
-		checkRange(tree.inputCount + tree.constantCount, 0, tree.storageSlots + 1);
-		checkRange(tree.outputCount + tree.constantCount, 0, tree.storageSlots + 1);
-		tree.nodes.resize(tree.constantCount + tree.inputCount + tree.compositeCount + tree.outputCount);
-		auto tmpSelect = tmpCount;
-		auto maxInnerTmp = tmpCount;
-		auto maxOuterTmp = tmpCount + 1;
-		auto link = [&tree](Node &node, int32_t sourceIndex, Link::LinkType linkType) {
-			auto &source = tree.sources[sourceIndex];
-			source.uses += 1;
-			auto nodeIndex = source.nodeIndex;
-			auto &linkedNode = tree.nodes[nodeIndex];
-			auto linkIndex = tree.links.size();
-			Link &link = tree.links.emplace_back();
-			link.type = linkType;
-			link.directions[linkUpstream].nodeIndex = nodeIndex;
-			link.directions[linkDownstream].nodeIndex = &node - &tree.nodes[0];
-			link.directions[linkUpstream].linkIndicesIndex = linkedNode.linkIndices[linkDownstream].size();
-			link.directions[linkDownstream].linkIndicesIndex = node.linkIndices[linkUpstream].size();
-			link.upstreamOutputIndex = source.outputIndex;
-			linkedNode.linkIndices[linkDownstream].push_back(linkIndex);
-			node.linkIndices[linkUpstream].push_back(linkIndex);
-		};
-		auto presentSource = [&tree](int32_t nodeIndex, int32_t outputIndex) {
-			tree.nodes[nodeIndex].sources.push_back(int32_t(tree.sources.size()));
-			tree.sources.push_back({ nodeIndex, outputIndex });
-		};
-		auto seenLsnsLife3 = false;
-		tree.constantValues.resize(tree.constantCount);
-		for (int32_t constantIndex = 0; constantIndex < tree.constantCount; ++constantIndex)
+		return stream;
+	}
+
+	std::istream &operator >>(std::istream &stream, Design &design)
+	{
+
+		int32_t workSlots;
+		int32_t storageSlots;
+		double storageSlotOverheadPenalty;
+		int32_t constantCount;
+		int32_t inputCount;
+		int32_t compositeCount;
+		int32_t outputCount;
+		stream >> workSlots >> storageSlots >> storageSlotOverheadPenalty >> constantCount >> inputCount >> compositeCount >> outputCount >> CheckStream();
+		std::vector<int32_t> constantValues(constantCount);
+		for (int32_t constantIndex = 0; constantIndex < constantCount; ++constantIndex)
 		{
-			auto nodeIndex = constantIndex;
-			auto &constant = tree.nodes[nodeIndex];
-			constant.type = Node::constant;
-			auto &constantValue = tree.constantValues[constantIndex];
-			stream >> constantValue >> CheckCin();
-			checkRange(constantValue, 0, 0x40000000);
-			if (constantValue == lsnsLife3Value)
-			{
-				seenLsnsLife3 = true;
-			}
-			presentSource(nodeIndex, 0);
+			stream >> constantValues[constantIndex] >> CheckStream();
 		}
-		checkRange(seenLsnsLife3 ? 1 : 0, 1, 2);
-		tree.inputStorageSlots.resize(tree.inputCount);
-		for (int32_t inputIndex = 0; inputIndex < tree.inputCount; ++inputIndex)
+		std::vector<int32_t> inputStorageSlots(inputCount);
+		for (int32_t inputIndex = 0; inputIndex < inputCount; ++inputIndex)
 		{
-			auto nodeIndex = tree.constantCount + inputIndex;
-			auto &input = tree.nodes[nodeIndex];
-			input.type = Node::input;
-			auto &inputStorageSlot = tree.inputStorageSlots[inputIndex];
-			stream >> inputStorageSlot >> CheckCin();
-			checkRange(inputStorageSlot, 0, tree.storageSlots);
-			presentSource(nodeIndex, 0);
+			stream >> inputStorageSlots[inputIndex] >> CheckStream();
 		}
-		for (int32_t compositeIndex = 0; compositeIndex < tree.compositeCount; ++compositeIndex)
+		std::vector<Design::ProtoComposite> composites(compositeCount);
+		for (int32_t compositeIndex = 0; compositeIndex < compositeCount; ++compositeIndex)
 		{
-			auto nodeIndex = tree.constantCount + tree.inputCount + compositeIndex;
-			auto &node = tree.nodes[nodeIndex];
 			int32_t tmp;
-			stream >> tmp >> CheckCin();
-			checkRange(tmpCount, 0, maxOuterTmp);
-			if (tmp == tmpSelect)
+			stream >> tmp >> CheckStream();
+			checkRange(tmp, 0, tmpCommutativity.size() + 1);
+			if (tmp == tmpCommutativity.size())
 			{
-				node.type = Node::select;
-				int32_t laneCount, stageCount;
-				stream >> laneCount >> stageCount >> CheckCin();
-				checkRange(laneCount, 1, bigNumber);
-				checkRange(stageCount, 2, bigNumber);
-				node.workSlotsNeeded = stageCount + laneCount * 2;
-				checkRange(node.workSlotsNeeded, 1, tree.workSlots + 1);
-				node.tmps.resize(stageCount - 1);
+				Design::ProtoSelect select;
+				int32_t laneCount;
+				int32_t stageCount;
+				stream >> laneCount >> stageCount >> CheckStream();
+				select.tmps.resize(stageCount - 1);
+				select.sources.resize(laneCount * 2 + stageCount);
 				for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
 				{
-					int32_t nonzeroSource, zeroSource;
-					stream >> nonzeroSource >> zeroSource >> CheckCin();
-					checkRange(nonzeroSource, 0, tree.sources.size());
-					checkRange(zeroSource, 0, tree.sources.size());
-					link(node, nonzeroSource, Link::toSelectNonzero);
-					link(node, zeroSource, Link::toSelectZero);
+					stream >> select.sources[laneIndex * 2] >> select.sources[laneIndex * 2 + 1] >> CheckStream();
 				}
 				for (int32_t stageIndex = 0; stageIndex < stageCount; ++stageIndex)
 				{
 					if (stageIndex > 0)
 					{
-						int32_t tmp;
-						stream >> tmp >> CheckCin();
-						checkRange(tmp, 0, maxInnerTmp);
-						node.tmps[stageIndex - 1] = tmp + 1;
+						stream >> select.tmps[stageIndex - 1] >> CheckStream();
 					}
-					int32_t source;
-					stream >> source >> CheckCin();
-					checkRange(source, 0, tree.sources.size());
-					link(node, source, Link::toBinary);
+					stream >> select.sources[laneCount * 2 + stageIndex] >> CheckStream();
 				}
-				for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
-				{
-					presentSource(nodeIndex, laneIndex);
-				}
+				composites[compositeIndex] = select;
 			}
 			else
 			{
-				node.type = Node::binary;
-				node.tmps.resize(1);
-				node.tmps[0] = tmp + 1;
-				int32_t rhsSource, lhsSource;
-				stream >> rhsSource >> lhsSource >> CheckCin();
-				checkRange(rhsSource, 0, tree.sources.size());
-				checkRange(lhsSource, 0, tree.sources.size());
-				link(node, rhsSource, Link::toBinary);
-				link(node, lhsSource, Link::toBinary);
-				node.workSlotsNeeded = 2;
-				presentSource(nodeIndex, 0);
+				Design::ProtoBinary binary;
+				binary.tmp = tmp;
+				stream >> binary.rhsSource >> binary.lhsSource >> CheckStream();
+				composites[compositeIndex] = binary;
 			}
 		}
-		tree.outputLinks.resize(tree.outputCount);
-		for (int32_t outputIndex = 0; outputIndex < tree.outputCount; ++outputIndex)
+		std::vector<Design::ProtoOutputLink> outputLinks(outputCount);
+		for (int32_t outputIndex = 0; outputIndex < outputCount; ++outputIndex)
 		{
-			auto nodeIndex = tree.constantCount + tree.inputCount + tree.compositeCount + outputIndex;
-			auto &node = tree.nodes[nodeIndex];
-			auto &outputSource = tree.outputLinks[outputIndex].sourceIndex;
-			auto &outputStorageSlot = tree.outputLinks[outputIndex].storageSlot;
-			stream >> outputSource >> outputStorageSlot >> CheckCin();
-			checkRange(outputSource, 0, tree.sources.size());
-			checkRange(outputStorageSlot, 0, tree.storageSlots);
-			node.type = Node::output;
-			link(node, outputSource, Link::toOutput);
+			auto &outputLink = outputLinks[outputIndex];
+			stream >> outputLink.source >> outputLink.storageSlot >> CheckStream();
 		}
+		design = Design(
+			workSlots,
+			storageSlots,
+			storageSlotOverheadPenalty,
+			constantValues,
+			inputStorageSlots,
+			composites,
+			outputLinks
+		);
 		return stream;
 	}
 
@@ -1371,11 +1471,11 @@ namespace
 		stream << " >>>            temperature: " << state.temp << std::endl;
 		stream << " >>> successful transitions: " << state.iteration << std::endl;
 		stream << " >>>     storage slot count: " << plan.storageSlotCount;
-		auto showStorageSlots = state.tree->storageSlots;
-		if (plan.storageSlotCount > state.tree->storageSlots)
+		auto showStorageSlots = state.design->storageSlots;
+		if (plan.storageSlotCount > state.design->storageSlots)
 		{
 			showStorageSlots = plan.storageSlotCount;
-			stream << " (above the desired " << state.tree->storageSlots << ")";
+			stream << " (above the desired " << state.design->storageSlots << ")";
 		}
 		stream << std::endl;
 		stream << " >>>         particle count: " << plan.partCount << std::endl;
@@ -1385,7 +1485,7 @@ namespace
 			stream << "___ ";
 		}
 		stream << "  ";
-		for (int32_t columnIndex = 0; columnIndex < state.tree->workSlots; ++columnIndex)
+		for (int32_t columnIndex = 0; columnIndex < state.design->workSlots; ++columnIndex)
 		{
 			stream << "_________ ";
 		}
@@ -1467,7 +1567,7 @@ namespace
 				std::optional<int32_t> cstoredTo;
 				std::optional<int32_t> nodeIndex;
 			};
-			std::vector<WorkSlotState> workSlotStates(state.tree->workSlots);
+			std::vector<WorkSlotState> workSlotStates(state.design->workSlots);
 			while (true)
 			{
 				auto &step = plan.steps[planIndex];
@@ -1518,7 +1618,7 @@ namespace
 						stream << std::setw(2) << *workSlotState.loadedFrom;
 						stream << "/" << std::setw(1) << std::hex << std::uppercase << *workSlotState.tmp << std::dec << "->";
 					}
-					stream << std::setw(3) << state.tree->nodes[*workSlotState.nodeIndex].sources[0];
+					stream << std::setw(3) << state.design->nodes[*workSlotState.nodeIndex].sources[0];
 				}
 				else
 				{
@@ -1628,14 +1728,22 @@ int main()
 	constexpr auto    tempFini          = 0.8;
 	constexpr auto    tempLoss          = 1e-7;
 	constexpr int32_t dumpStateInterval = 100000;
+	Design design;
+	try
+	{
+		std::cin >> design;
+	}
+	catch (const StreamFailed &ex)
+	{
+		std::cerr << "failed to parse input: " << ex.what() << std::endl;
+		return 2;
+	}
+	auto temp = tempInit;
+	State state = design.Initial(temp);
+	std::cerr << state;
 	std::random_device rd;
 	std::mt19937_64 rng(rd());
 	std::uniform_real_distribution<double> rdist(0.0, 1.0);
-	Tree tree;
-	std::cin >> tree;
-	auto temp = tempInit;
-	State state = tree.Initial(temp);
-	std::cerr << state;
 	int32_t count = 0;
 	while (temp > tempFini)
 	{
@@ -1655,12 +1763,16 @@ int main()
 		temp -= tempLoss;
 	}
 	std::cerr << state;
-	auto plan = state.GetEnergy<State::EnergyWithPlan>().ToPlan();
-	if (!plan)
+	Plan plan;
+	try
 	{
-		std::cerr << "design parameters not satisfied, no plan generated" << std::endl;
+		plan = state.GetEnergy<State::EnergyWithPlan>().ToPlan();
+	}
+	catch (const State::EnergyWithPlan::ToPlanFailed &ex)
+	{
+		std::cerr << "design parameters not satisfied, no plan generated: " << ex.what() << std::endl;
 		return 1;
 	}
-	std::cout << *plan;
+	std::cout << plan;
 	return 0;
 }
