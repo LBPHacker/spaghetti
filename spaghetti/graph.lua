@@ -1,8 +1,7 @@
 local strict = require("spaghetti.strict")
 strict.wrap_env()
 
-local priority_queue = require("spaghetti.priority_queue")
-local misc           = require("spaghetti.misc")
+local misc = require("spaghetti.misc")
 
 local function bfs(to_visit, visit)
 	local seen = {}
@@ -50,59 +49,7 @@ local function ts(initial, children, parents, visit) -- visit returns whether to
 	end)
 end
 
-local function astar(initial, final, neighbours, heuristic)
-	local meta = {}
-	local inserted = 0
-	local function discover(node)
-		inserted = inserted + 1
-		meta[node] = {
-			cumulative = math.huge,
-			inserted   = inserted,
-			neighbours = neighbours(node),
-			heuristic  = heuristic(node),
-		}
-	end
-	local pq = priority_queue.make_priority_queue(function(left, right)
-		local leftm = meta[left]
-		local rightm = meta[right]
-		if leftm.perceived ~= rightm.perceived then
-			return leftm.perceived < rightm.perceived
-		end
-		return leftm.inserted > rightm.inserted
-	end)
-	discover(initial)
-	meta[initial].cumulative = 0
-	meta[initial].perceived = meta[initial].heuristic
-	pq:insert(initial)
-	while not pq:empty() do
-		local current = pq:remove()
-		if current == final then
-			local path = {}
-			while current do
-				table.insert(path, current)
-				current = meta[current].previous
-			end
-			return misc.reverse(path)
-		end
-		local current_cumulative = meta[current].cumulative
-		for neighbour, distance in pairs(meta[current].neighbours) do
-			local neighbour_cumulative = current_cumulative + distance
-			if not meta[neighbour] then
-				discover(neighbour)
-			end
-			local neighbourm = meta[neighbour]
-			if neighbour_cumulative < neighbourm.cumulative then
-				neighbourm.previous = current
-				neighbourm.cumulative = neighbour_cumulative
-				neighbourm.perceived = neighbour_cumulative + neighbourm.heuristic
-				pq:upsert(neighbour)
-			end
-		end
-	end
-end
-
 return {
-	bfs   = bfs,
-	ts    = ts,
-	astar = astar,
+	bfs = bfs,
+	ts  = ts,
 }

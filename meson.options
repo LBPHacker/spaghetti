@@ -1,0 +1,6 @@
+option(
+	'install_dir',
+	type: 'string',
+	value: '/usr/share/lua/5.1',
+	description: 'Lua module directory to install the module to',
+)

@@ -4,6 +4,7 @@ local strict = require("spaghetti.strict")
 strict.wrap_env()
 
 local spaghetti = require("spaghetti.init") -- lua5.1 is broken and doesn't have ?/init.lua in package.path
+local optimize  = require("spaghetti.optimize")
 
 local band     = spaghetti.band
 local bxor     = spaghetti.bxor
@@ -46,7 +47,7 @@ local rhs = spaghetti.input(0x10000000, 0x0000FFFF)
 local sum = ks(lhs, rhs)
 sum:assert(0x10000000, 0x0001FFFF)
 
-spaghetti.build({
+local design = spaghetti.build({
 	inputs = {
 		[ 1 ] = lhs,
 		[ 3 ] = rhs,
@@ -58,3 +59,9 @@ spaghetti.build({
 	storage_slots = 21,
 	work_slots    = 8,
 })
+local state = design:initial()
+local optimizer = optimize.make_optimizer(1337)
+optimizer:state(state, 1)
+optimizer:dispatch(0.95, 1e-7, 100000)
+optimizer:wait()
+print(optimizer:state():dump())

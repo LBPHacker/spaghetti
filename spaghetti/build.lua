@@ -6,6 +6,7 @@ local user_node = require("spaghetti.user_node")
 local graph     = require("spaghetti.graph")
 local misc      = require("spaghetti.misc")
 local id_store  = require("spaghetti.id_store")
+local optimize  = require("spaghetti.optimize")
 
 local function hierarchy_up(output_keys, visit)
 	graph.bfs(output_keys, function(expr)
@@ -139,6 +140,13 @@ local function check_info(info)
 			misc.user_error("input.inputs and info.clobbers share key %s", tostring(shared_key))
 		end
 	end
+	local mode = "design"
+	if info.mode ~= nil then
+		if info.mode ~= "design" and info.mode ~= "text" then
+			misc.user_error("input.mode has unrecognized value %s", tostring(info.mode))
+		end
+		mode = info.mode
+	end
 	return {
 		stacks        = info.stacks,
 		storage_slots = info.storage_slots,
@@ -147,6 +155,7 @@ local function check_info(info)
 		output_slots  = info.outputs,
 		output_keys   = misc.values_to_keys(info.outputs),
 		on_progress   = info.on_progress,
+		mode          = mode,
 		clobbers      = clobbers,
 	}
 end
@@ -363,7 +372,7 @@ end
 local storage_slot_overhead_penalty = 10
 local LSNS_LIFE_3                   = 0x10000003
 
-local function construct_layout(stacks, storage_slots, max_work_slots, outputs, on_progress)
+local function construct_layout(stacks, storage_slots, max_work_slots, outputs, on_progress, mode)
 	local function constant_value(expr)
 		return bit.bor(expr.keepalive_, expr.payload_)
 	end
@@ -431,59 +440,117 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 			return expr_to_index[param.node] + param.output_index - 2
 		end
 	end
-	io.stdout:write(("%i %i\n"):format(max_work_slots, storage_slots))
-	io.stdout:write("\n")
-	io.stdout:write(("%f\n"):format(storage_slot_overhead_penalty))
-	io.stdout:write(("%i %i %i %i\n"):format(#constants, #inputs, #composites, #outputs))
-	for _, expr in ipairs(constants) do
-		io.stdout:write(("%i "):format(constant_value(expr)))
-	end
-	io.stdout:write("\n")
-	for _, expr in ipairs(inputs) do
-		io.stdout:write(("%i "):format(expr.input_index_ - 1))
-	end
-	io.stdout:write("\n")
-	for _, expr in ipairs(composites) do
-		local function get_expr_index(param_index)
-			return param_to_index(expr.params_[expr.info_.params[param_index]])
-		end
-		if expr.info_.method == "filt_tmp" then
-			io.stdout:write(("%i %i %i\n"):format(
-				expr.info_.filt_tmp,
-				get_expr_index(1),
-				get_expr_index(2)
-			))
-		else
-			io.stdout:write(("%i %i %i"):format(
-				12,
-				expr.info_.lanes,
-				expr.info_.stages
-			))
-			for j = 1, expr.info_.lanes do
-				io.stdout:write((" %i %i"):format(
-					get_expr_index(j * 2 - 1),
-					get_expr_index(j * 2)
-				))
-			end
-			for j = 1, expr.info_.stages do
-				if j > 1 then
-					io.stdout:write((" %i"):format(expr.info_.filt_tmps[j]))
-				end
-				io.stdout:write((" %i"):format(get_expr_index(expr.info_.lanes * 2 + j)))
-			end
-			io.stdout:write("\n")
-		end
-	end
 	local source_index_to_output_slots = {}
 	for _, param in ipairs(outputs) do
 		source_index_to_output_slots[param_to_index(param)] = param.node.output_slots_[param.output_index]
 	end
-	for source_index, output_slots in pairs(source_index_to_output_slots) do
-		for _, output_slot in ipairs(output_slots) do
-			io.stdout:write(("%i %i "):format(source_index, output_slot - 1))
+	local function get_expr_index(expr, param_index)
+		return param_to_index(expr.params_[expr.info_.params[param_index]])
+	end
+	if mode == "text" then
+		local buf = {}
+		table.insert(buf, ("%i %i\n"):format(max_work_slots, storage_slots))
+		table.insert(buf, ("%f\n"):format(storage_slot_overhead_penalty))
+		table.insert(buf, ("%i %i %i %i\n"):format(#constants, #inputs, #composites, #outputs))
+		for _, expr in ipairs(constants) do
+			table.insert(buf, ("%i "):format(constant_value(expr)))
+		end
+		table.insert(buf, "\n")
+		for _, expr in ipairs(inputs) do
+			table.insert(buf, ("%i "):format(expr.input_index_ - 1))
+		end
+		table.insert(buf, "\n")
+		for _, expr in ipairs(composites) do
+			if expr.info_.method == "filt_tmp" then
+				table.insert(buf, ("%i %i %i\n"):format(
+					expr.info_.filt_tmp,
+					get_expr_index(expr, 1),
+					get_expr_index(expr, 2)
+				))
+			else
+				table.insert(buf, ("%i %i %i"):format(
+					12,
+					expr.info_.lanes,
+					expr.info_.stages
+				))
+				for j = 1, expr.info_.lanes do
+					table.insert(buf, (" %i %i"):format(
+						get_expr_index(expr, j * 2 - 1),
+						get_expr_index(expr, j * 2)
+					))
+				end
+				for j = 1, expr.info_.stages do
+					if j > 1 then
+						table.insert(buf, (" %i"):format(expr.info_.filt_tmps[j]))
+					end
+					table.insert(buf, (" %i"):format(get_expr_index(expr, expr.info_.lanes * 2 + j)))
+				end
+				table.insert(buf, "\n")
+			end
+		end
+		for source_index, output_slots in pairs(source_index_to_output_slots) do
+			for _, output_slot in ipairs(output_slots) do
+				table.insert(buf, ("%i %i "):format(source_index, output_slot - 1))
+			end
+		end
+		table.insert(buf, "\n")
+		return table.concat(buf)
+	end
+	local design_params = {
+		work_slots                    = max_work_slots,
+		storage_slots                 = storage_slots,
+		storage_slot_overhead_penalty = storage_slot_overhead_penalty,
+		constants                     = {},
+		inputs                        = {},
+		composites                    = {},
+		outputs                       = {},
+	}
+	for _, expr in ipairs(constants) do
+		table.insert(design_params.constants, constant_value(expr))
+	end
+	for _, expr in ipairs(inputs) do
+		table.insert(design_params.inputs, expr.input_index_ - 1)
+	end
+	for _, expr in ipairs(composites) do
+		if expr.info_.method == "filt_tmp" then
+			table.insert(design_params.composites, {
+				tmp     = expr.info_.filt_tmp,
+				sources = {
+					get_expr_index(expr, 1),
+					get_expr_index(expr, 2),
+				},
+			})
+		else
+			local tmps = {}
+			local sources = {}
+			for j = 1, expr.info_.lanes do
+				table.insert(sources, get_expr_index(expr, j * 2 - 1))
+				table.insert(sources, get_expr_index(expr, j * 2))
+			end
+			for j = 1, expr.info_.stages do
+				if j > 1 then
+					table.insert(tmps, expr.info_.filt_tmps[j])
+				end
+				table.insert(sources, get_expr_index(expr, expr.info_.lanes * 2 + j))
+			end
+			table.insert(design_params.composites, {
+				tmp         = 12,
+				lane_count  = expr.info_.lanes,
+				stage_count = expr.info_.stages,
+				tmps        = tmps,
+				sources     = sources,
+			})
 		end
 	end
-	io.stdout:write("\n")
+	for source_index, output_slots in pairs(source_index_to_output_slots) do
+		for _, output_slot in ipairs(output_slots) do
+			table.insert(design_params.outputs, {
+				source       = source_index,
+				storage_slot = output_slot - 1,
+			})
+		end
+	end
+	return optimize.make_design(design_params)
 end
 
 local function build(info)
@@ -492,7 +559,7 @@ local function build(info)
 		check_zeroness(info.output_keys)
 		check_connectivity(info.output_keys, info.inputs)
 		local outputs = preprocess_tree(info.output_keys, info.output_slots, info.inputs)
-		construct_layout(info.stacks, info.storage_slots, info.work_slots, outputs, info.on_progress)
+		return construct_layout(info.stacks, info.storage_slots, info.work_slots, outputs, info.on_progress, info.mode)
 	end)
 end
 
