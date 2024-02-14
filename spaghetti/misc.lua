@@ -29,7 +29,7 @@ end
 
 local function user_frame_name()
 	local _, err = pcall(user_error, "@")
-	return assert(err:match("^(.*): @$"))
+	return err:match("^(.*): @$") or "[cannot determine user frame name]"
 end
 
 local function values_to_keys(tbl)

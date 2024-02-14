@@ -112,6 +112,10 @@ namespace
 			lua_pushinteger(L, v);
 			lua_setfield(L, -2, k);
 		};
+		auto setType = [L](const char *v) {
+			lua_pushstring(L, v);
+			lua_setfield(L, -2, "type");
+		};
 		lua_newtable(L);
 		setField("stack_count", plan->stackCount);
 		setField("part_count", plan->cost);
@@ -122,66 +126,80 @@ namespace
 			lua_newtable(L);
 			if (auto *load = std::get_if<Plan::Load>(&step))
 			{
+				setType("load");
 				setField("stack_index", load->stackIndex);
 				setField("work_slot", load->workSlot);
 				setField("storage_slot", load->storageSlot);
 			}
 			else if (auto *cload = std::get_if<Plan::Cload>(&step))
 			{
+				setType("cload");
 				setField("stack_index", cload->stackIndex);
 				setField("work_slot", cload->workSlot);
 			}
 			else if (auto *mode = std::get_if<Plan::Mode>(&step))
 			{
+				setType("mode");
 				setField("stack_index", mode->stackIndex);
 				setField("tmp", mode->tmp);
 			}
 			else if (auto *store = std::get_if<Plan::Store>(&step))
 			{
+				setType("store");
 				setField("stack_index", store->stackIndex);
 				setField("work_slot", store->workSlot);
 				setField("storage_slot", store->storageSlot);
 			}
 			else if (auto *cstore = std::get_if<Plan::Cstore>(&step))
 			{
+				setType("cstore");
 				setField("stack_index", cstore->stackIndex);
 				setField("work_slot", cstore->workSlot);
 				setField("storage_slot", cstore->storageSlot);
 			}
 			else if (auto *aray = std::get_if<Plan::Aray>(&step))
 			{
+				setType("aray");
 				setField("stack_index", aray->stackIndex);
 			}
 			else if (auto *east = std::get_if<Plan::East>(&step))
 			{
+				setType("east");
 				setField("stack_index", east->stackIndex);
 			}
 			else if (auto *west = std::get_if<Plan::West>(&step))
 			{
+				setType("west");
 				setField("stack_index", west->stackIndex);
 			}
 			else if (auto *clear = std::get_if<Plan::Clear>(&step))
 			{
+				setType("clear");
 				setField("stack_index", clear->stackIndex);
 			}
 			else if (auto *top = std::get_if<Plan::Top>(&step))
 			{
+				setType("top");
 				setField("stack_index", top->stackIndex);
 			}
 			else if (auto *bottom = std::get_if<Plan::Bottom>(&step))
 			{
+				setType("bottom");
 				setField("stack_index", bottom->stackIndex);
 			}
 			else if (auto *lcap = std::get_if<Plan::Lcap>(&step))
 			{
+				setType("lcap");
 				setField("life3_index", lcap->life3Index);
 			}
 			else if (auto *lfilt = std::get_if<Plan::Lfilt>(&step))
 			{
+				setType("lfilt");
 				setField("work_slot", lfilt->workSlot);
 			}
 			else if (auto *rfilt = std::get_if<Plan::Rfilt>(&step))
 			{
+				setType("rfilt");
 				setField("storage_slot", rfilt->storageSlot);
 				setField("constant_value", rfilt->constantValue);
 			}
@@ -356,10 +374,16 @@ namespace
 		return 2;
 	}
 
+	int HardwareConcurrency(lua_State *L)
+	{
+		lua_pushinteger(L, std::thread::hardware_concurrency());
+		return 1;
+	}
+
 	int OptimizerHandle::New(lua_State *L)
 	{
 		uint64_t seed = luaL_checkinteger(L, 1);
-		uint32_t threadCount = luaL_optinteger(L, 2, std::thread::hardware_concurrency());
+		uint32_t threadCount = luaL_optinteger(L, 2, 1);
 		auto *optimizerHandle = reinterpret_cast<OptimizerHandle *>(lua_newuserdata(L, sizeof(OptimizerHandle)));
 		if (!optimizerHandle)
 		{
@@ -418,16 +442,20 @@ namespace
 	int OptimizerHandle::StateWrapper(lua_State *L)
 	{
 		auto *optimizerHandle = reinterpret_cast<OptimizerHandle *>(luaL_checkudata(L, 1, OptimizerHandle::mtName));
-		if (optimizerHandle->optimizer->Dispatched())
-		{
-			return luaL_error(L, "optimizer is dispatched");
-		}
 		if (lua_gettop(L) < 2)
 		{
 			auto ostate = optimizerHandle->optimizer->PeekState();
-			return MakeStateHandle(L, std::make_shared<State>(*ostate.state));
+			MakeStateHandle(L, std::make_shared<State>(*ostate.state));
 			lua_pushnumber(L, ostate.temperature);
 			return 2;
+		}
+		if (optimizerHandle->optimizer->Dispatched() && optimizerHandle->optimizer->Ready())
+		{
+			optimizerHandle->optimizer->Wait();
+		}
+		if (optimizerHandle->optimizer->Dispatched())
+		{
+			return luaL_error(L, "optimizer is dispatched");
 		}
 		auto *stateHandle = reinterpret_cast<StateHandle *>(luaL_checkudata(L, 2, StateHandle::mtName));
 		double temperatureInitial = luaL_checknumber(L, 3);
@@ -452,19 +480,20 @@ namespace
 
 extern "C" int luaopen_spaghetti_optimize(lua_State *L)
 {
+	lua_newtable(L);
 	{
 		static const luaL_Reg optimizerReg[] = {
-			{ "wait", OptimizerHandle::Wait },
-			{ "cancel", OptimizerHandle::Cancel },
-			{ "state", OptimizerHandle::StateWrapper },
-			{ "ready", OptimizerHandle::Ready },
-			{ "dispatched", OptimizerHandle::Dispatched },
-			{ "dispatch", OptimizerHandle::Dispatch },
+			{ "wait"      , OptimizerHandle::Wait         },
+			{ "cancel"    , OptimizerHandle::Cancel       },
+			{ "state"     , OptimizerHandle::StateWrapper },
+			{ "ready"     , OptimizerHandle::Ready        },
+			{ "dispatched", OptimizerHandle::Dispatched   },
+			{ "dispatch"  , OptimizerHandle::Dispatch     },
 			{ NULL, NULL }
 		};
 		luaL_newmetatable(L, OptimizerHandle::mtName);
 		static const luaL_Reg optimizerMt[] = {
-			{ "__gc", OptimizerHandle::Gc },
+			{ "__gc"      , OptimizerHandle::Gc       },
 			{ "__tostring", OptimizerHandle::Tostring },
 			{ NULL, NULL }
 		};
@@ -472,18 +501,18 @@ extern "C" int luaopen_spaghetti_optimize(lua_State *L)
 		lua_newtable(L);
 		luaL_register(L, NULL, optimizerReg);
 		lua_setfield(L, -2, "__index");
-		lua_pop(L, 1);
+		lua_setfield(L, -2, "optimizer_mt");
 	}
 	{
 		static const luaL_Reg stateReg[] = {
-			{ "dump", StateHandle::Dump },
+			{ "dump"  , StateHandle::Dump          },
 			{ "energy", StateHandle::EnergyWrapper },
-			{ "plan", StateHandle::PlanWrapper },
+			{ "plan"  , StateHandle::PlanWrapper   },
 			{ NULL, NULL }
 		};
 		luaL_newmetatable(L, StateHandle::mtName);
 		static const luaL_Reg stateMt[] = {
-			{ "__gc", StateHandle::Gc },
+			{ "__gc"      , StateHandle::Gc       },
 			{ "__tostring", StateHandle::Tostring },
 			{ NULL, NULL }
 		};
@@ -491,7 +520,7 @@ extern "C" int luaopen_spaghetti_optimize(lua_State *L)
 		lua_newtable(L);
 		luaL_register(L, NULL, stateReg);
 		lua_setfield(L, -2, "__index");
-		lua_pop(L, 1);
+		lua_setfield(L, -2, "state_mt");
 	}
 	{
 		static const luaL_Reg designReg[] = {
@@ -500,7 +529,7 @@ extern "C" int luaopen_spaghetti_optimize(lua_State *L)
 		};
 		luaL_newmetatable(L, DesignHandle::mtName);
 		static const luaL_Reg designMt[] = {
-			{ "__gc", DesignHandle::Gc },
+			{ "__gc"      , DesignHandle::Gc       },
 			{ "__tostring", DesignHandle::Tostring },
 			{ NULL, NULL }
 		};
@@ -508,14 +537,14 @@ extern "C" int luaopen_spaghetti_optimize(lua_State *L)
 		lua_newtable(L);
 		luaL_register(L, NULL, designReg);
 		lua_setfield(L, -2, "__index");
-		lua_pop(L, 1);
+		lua_setfield(L, -2, "design_mt");
 	}
-	lua_newtable(L);
 	{
 		static const luaL_Reg optimizeReg[] = {
-			{ "optimize_once", OptimizeOnceWrapper },
-			{ "make_design", DesignHandle::New },
-			{ "make_optimizer", OptimizerHandle::New },
+			{ "optimize_once"       , OptimizeOnceWrapper  },
+			{ "make_design"         , DesignHandle::New    },
+			{ "make_optimizer"      , OptimizerHandle::New },
+			{ "hardware_concurrency", HardwareConcurrency },
 			{ NULL, NULL }
 		};
 		luaL_register(L, NULL, optimizeReg);

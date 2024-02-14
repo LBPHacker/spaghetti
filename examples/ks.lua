@@ -47,7 +47,7 @@ local rhs = spaghetti.input(0x10000000, 0x0000FFFF)
 local sum = ks(lhs, rhs)
 sum:assert(0x10000000, 0x0001FFFF)
 
-local design = spaghetti.build({
+return spaghetti.build({
 	inputs = {
 		[ 1 ] = lhs,
 		[ 3 ] = rhs,
@@ -59,9 +59,3 @@ local design = spaghetti.build({
 	storage_slots = 21,
 	work_slots    = 8,
 })
-local state = design:initial()
-local optimizer = optimize.make_optimizer(1337)
-optimizer:state(state, 1)
-optimizer:dispatch(0.95, 1e-7, 100000)
-optimizer:wait()
-print(optimizer:state():dump())
