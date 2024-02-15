@@ -258,20 +258,25 @@ local function plot(x, y, data, extra)
 		if lhs.k ~= rhs.k then return lhs.k < rhs.k end
 		return false
 	end)
+	local ids = {}
 	for i = 1, #parts do
 		local id = sim.partCreate(-3, 4, 4, pt.DMND)
 		if id == -1 then
 			for j = 1, i - 1 do
-				sim.partKill(parts[j].id)
+				sim.partKill(ids[j])
 			end
 			error("out of particle ids", 2)
 		end
+		ids[i] = id
+	end
+	table.sort(ids)
+	for i = 1, #parts do
 		parts[i].x = parts[i].x + x
 		parts[i].y = parts[i].y + y
-		sim.partProperty(id, "type", parts[i].type)
+		sim.partProperty(ids[i], "type", parts[i].type)
 		for key, value in pairs(parts[i]) do
 			if sim["FIELD_" .. key:upper()] and key ~= "type" then
-				sim.partProperty(id, key, value)
+				sim.partProperty(ids[i], key, value)
 			end
 		end
 	end
