@@ -170,6 +170,14 @@ local function make_input(keepalive, payload)
 	end)
 end
 
+local function vonoff_forward(keepalive, payload)
+	return keepalive, bitx.bxor(check.payload_bits, bitx.bor(keepalive, payload))
+end
+
+local function vonoff_backward(von, voff)
+	return von, bitx.bxor(check.payload_bits, bitx.bor(von, voff))
+end
+
 local opnames = {}
 local add_op
 do
@@ -209,9 +217,15 @@ end
 add_op("band", {
 	params = { "lhs", "rhs" },
 	payload = function(lhs, rhs)
-		local keepalive = bitx.band(lhs.keepalive_, rhs.keepalive_)
-		local payload = bitx.band(lhs.payload_, rhs.payload_)
-		return keepalive, payload
+		--   0 1 X
+		-- 0 0 0 0
+		-- 1 0 1 X
+		-- X 0 X X
+		local lhs_von, lhs_voff = vonoff_forward(lhs.keepalive_, lhs.payload_)
+		local rhs_von, rhs_voff = vonoff_forward(rhs.keepalive_, rhs.payload_)
+		local von = bitx.band(lhs_von, rhs_von)
+		local voff = bitx.bor(lhs_voff, rhs_voff)
+		return vonoff_backward(von, voff)
 	end,
 	exec = function(lhs, rhs)
 		return bitx.band(lhs, rhs)
@@ -223,9 +237,15 @@ add_op("band", {
 add_op("bor", {
 	params = { "lhs", "rhs" },
 	payload = function(lhs, rhs)
-		local keepalive = bitx.bor(lhs.keepalive_, rhs.keepalive_)
-		local payload = bitx.band(bitx.bor(lhs.payload_, rhs.payload_), bitx.bxor(keepalive, check.payload_bits))
-		return keepalive, payload
+		--   0 1 X
+		-- 0 0 1 X
+		-- 1 1 1 1
+		-- X X 1 X
+		local lhs_von, lhs_voff = vonoff_forward(lhs.keepalive_, lhs.payload_)
+		local rhs_von, rhs_voff = vonoff_forward(rhs.keepalive_, rhs.payload_)
+		local von = bitx.bor(lhs_von, rhs_von)
+		local voff = bitx.band(lhs_voff, rhs_voff)
+		return vonoff_backward(von, voff)
 	end,
 	exec = function(lhs, rhs)
 		return bitx.bor(lhs, rhs)
@@ -237,9 +257,15 @@ add_op("bor", {
 add_op("bsub", {
 	params = { "lhs", "rhs" },
 	payload = function(lhs, rhs)
-		local keepalive = bitx.band(lhs.keepalive_, bitx.bxor(rhs.keepalive_, check.keepalive_bits))
-		local payload = bitx.band(lhs.payload_, bitx.bxor(rhs.payload_, check.payload_bits))
-		return keepalive, payload
+		--   0 1 X
+		-- 0 0 0 0
+		-- 1 1 0 X
+		-- X X 0 X
+		local lhs_von, lhs_voff = vonoff_forward(lhs.keepalive_, lhs.payload_)
+		local rhs_von, rhs_voff = vonoff_forward(rhs.keepalive_, rhs.payload_)
+		local von = bitx.band(lhs_von, rhs_voff)
+		local voff = bitx.bor(lhs_voff, rhs_von)
+		return vonoff_backward(von, voff)
 	end,
 	exec = function(lhs, rhs)
 		return bitx.band(lhs, bitx.bxor(rhs, check.payload_bits))
@@ -251,9 +277,15 @@ add_op("bsub", {
 add_op("bxor", {
 	params = { "lhs", "rhs" },
 	payload = function(lhs, rhs)
-		local keepalive = bitx.bxor(lhs.keepalive_, rhs.keepalive_)
-		local payload = bitx.bor(lhs.payload_, rhs.payload_)
-		return keepalive, payload
+		--   0 1 X
+		-- 0 0 1 X
+		-- 1 1 0 X
+		-- X X X X
+		local lhs_von, lhs_voff = vonoff_forward(lhs.keepalive_, lhs.payload_)
+		local rhs_von, rhs_voff = vonoff_forward(rhs.keepalive_, rhs.payload_)
+		local von = bitx.bor(bitx.band(lhs_von, rhs_voff), bitx.band(lhs_voff, rhs_von))
+		local voff = bitx.bor(bitx.band(lhs_voff, rhs_voff), bitx.band(lhs_von, rhs_von))
+		return vonoff_backward(von, voff)
 	end,
 	exec = function(lhs, rhs)
 		return bitx.bxor(lhs, rhs)
