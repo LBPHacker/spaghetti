@@ -52,6 +52,9 @@ end
 
 local function check_zeroness(output_keys)
 	hierarchy_up(output_keys, function(expr)
+		if not expr.marked_zeroable_ and expr:can_be_zero() then
+			misc.user_error("%s can be zero despite not being marked zeroable", tostring(expr))
+		end
 		if expr.type_ == "composite" then
 			expr:check_inputs_()
 		end
@@ -304,12 +307,17 @@ local function flatten_selects(outputs)
 						assert(not (curr.node.params_.rhs.node.marked_zeroable_ and curr.node.params_.lhs.node.marked_zeroable_), "both rhs and lhs are marked zeroable")
 						local function check(param, other)
 							if curr.node.params_[param].node.marked_zeroable_ then
-								curr = curr.node.params_[param]
 								insert_stage(curr.node.params_[other], curr.node.info_.filt_tmp)
+								curr = curr.node.params_[param]
+								return true
 							end
+							return false
 						end
-						check("rhs", "lhs")
-						check("lhs", "rhs")
+						if check("rhs", "lhs") then
+							-- nothing
+						elseif check("lhs", "rhs") then
+							-- nothing
+						end
 					end
 					insert_stage(curr.node.params_.rhs, curr.node.info_.filt_tmp)
 					insert_stage(curr.node.params_.lhs, 0)

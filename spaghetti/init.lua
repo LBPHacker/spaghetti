@@ -5,18 +5,19 @@ local check      = require("spaghetti.check")
 local user_node  = require("spaghetti.user_node")
 local build      = require("spaghetti.build")
 local misc       = require("spaghetti.misc")
+local bitx       = require("spaghetti.bitx")
 
 local select_group_m = strict.make_mt("spaghetti.select_group.select_group")
 
 local function constant(keepalive, payload)
 	return misc.user_wrap(function()
-		return user_node.make_constant(keepalive, payload)
+		return user_node.make_constant_(keepalive, payload)
 	end)
 end
 
 local function input(keepalive, payload)
 	return misc.user_wrap(function()
-		return user_node.make_input(keepalive, payload)
+		return user_node.make_input_(keepalive, payload)
 	end)
 end
 
@@ -38,9 +39,29 @@ local function selectf(cond, ...) -- [ vnonzero[1], vzero[1], [ vnonzero[2], vze
 	end, ...)
 end
 
+local function lshiftk(expr, amount)
+	return misc.user_wrap(function()
+		expr = user_node.maybe_promote_number_(expr)
+		check.mt(user_node.mt_, "expr", expr)
+		check.kshift("amount", amount)
+		return expr:lshift(user_node.make_constant_(bitx.lshift(1, amount)))
+	end)
+end
+
+local function rshiftk(expr, amount)
+	return misc.user_wrap(function()
+		expr = user_node.maybe_promote_number_(expr)
+		check.mt(user_node.mt_, "expr", expr)
+		check.kshift("amount", amount)
+		return expr:rshift(user_node.make_constant_(bitx.lshift(1, amount)))
+	end)
+end
+
 local spaghetti = strict.make_mt_one("spaghetti", {
 	constant = constant,
 	input    = input,
+	lshiftk  = lshiftk,
+	rshiftk  = rshiftk,
 	build    = build.build,
 })
 for key, info in pairs(user_node.opnames_) do

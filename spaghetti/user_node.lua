@@ -39,9 +39,6 @@ function user_node_i:input_error_(name, message)
 end
 
 function user_node_i:check_inputs_()
-	if not self.marked_zeroable_ and self:can_be_zero() then
-		misc.user_error("%s can be zero despite not being marked zeroable", tostring(self))
-	end
 	if self.type_ ~= "composite" then
 		assert(self.type_ == "input" or self.type_ == "constant")
 		return
@@ -142,6 +139,9 @@ local function make_constant_(keepalive, payload)
 	node.payload_    = payload
 	node.terminal_   = true
 	node.label_      = default_label()
+	if bitx.band(bitx.bor(keepalive, payload), check.keepalive_bits) ~= 0 then
+		node:never_zero()
+	end
 	return node
 end
 
@@ -158,15 +158,19 @@ local function maybe_promote_number(thing)
 	return thing
 end
 
+local function make_input_(keepalive, payload)
+	check_keepalive_payload(keepalive, payload)
+	local node = make_node("input")
+	node.keepalive_  = keepalive
+	node.payload_    = payload
+	node.terminal_   = true
+	node.label_      = default_label()
+	return node
+end
+
 local function make_input(keepalive, payload)
 	return misc.user_wrap(function()
-		check_keepalive_payload(keepalive, payload)
-		local node = make_node("input")
-		node.keepalive_  = keepalive
-		node.payload_    = payload
-		node.terminal_   = true
-		node.label_      = default_label()
-		return node
+		return make_input_(keepalive, payload)
 	end)
 end
 
@@ -332,7 +336,15 @@ local function do_shifts(lhs, rhs, func)
 	local keepalive, payload
 	for _, shift in ipairs(get_shifts(rhs)) do
 		local i_keepalive = bitx.band(func(lhs.keepalive_, shift), check.shift_aware_bits)
-		local i_payload = bitx.band(func(lhs.payload_, shift), check.shift_aware_bits)
+		local i_payload = func(lhs.payload_, shift)
+		if func == bitx.rshift and bitx.band(lhs.payload_, 0x80000000) ~= 0 then
+			if bitx.band(bitx.bor(lhs.keepalive_, lhs.payload_), bitx.lshift(1, shift) - 1) ~= 0 then
+				misc.user_error("shifting bits out of negative values is unpredicable")
+			end
+			-- ctype is an int; right shifts of signed types can be either arithmetic or logical in C++
+			i_payload = bitx.bor(i_payload, bitx.lshift(0xFFFFFFFF, 32 - shift))
+		end
+		i_payload = bitx.band(i_payload, check.shift_aware_bits)
 		if keepalive then
 			keepalive, payload = one_of(
 				{ keepalive_ = keepalive, payload_ = payload },
@@ -382,6 +394,7 @@ return strict.make_mt_one("spaghetti.user_node", {
 	make_constant         = make_constant,
 	make_constant_        = make_constant_,
 	make_input            = make_input,
+	make_input_           = make_input_,
 	mt_                   = user_node_m,
 	opnames_              = opnames,
 })

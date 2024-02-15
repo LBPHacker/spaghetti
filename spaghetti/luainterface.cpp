@@ -217,7 +217,9 @@ namespace
 		}
 		catch (const EnergyWithPlan::ToPlanFailed &ex)
 		{
-			return luaL_error(L, "design parameters not satisfied, no plan generated: %s", ex.what());
+			lua_pushnil(L);
+			lua_pushfstring(L, "design parameters not satisfied, no plan generated: %s", ex.what());
+			return 2;
 		}
 		auto setField = [L](const char *k, int32_t v) {
 			lua_pushinteger(L, v);
@@ -355,6 +357,7 @@ namespace
 		int32_t workSlots;
 		int32_t storageSlots;
 		double storageSlotOverheadPenalty;
+		// TODO: specify stack count
 		getField("work_slots", workSlots);
 		getField("storage_slots", storageSlots);
 		getField("storage_slot_overhead_penalty", storageSlotOverheadPenalty);

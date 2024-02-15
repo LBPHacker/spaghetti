@@ -631,71 +631,80 @@ EnergyType State::GetEnergy() const
 		{
 			selectStorageSlotSchedule.resize(lastNode.sources.size(), -1);
 		}
+		auto doLinkUpstream = [
+			this,
+			&nodeIndexToLayerIndex,
+			&workSlotsUsed,
+			&doLoad,
+			&doCstore,
+			layerIndex
+		](int32_t nodeIndex, int32_t linkIndicesIndex) {
+			auto &node = design->nodes[nodeIndex];
+			auto linkIndex = node.linkIndices[linkUpstream][linkIndicesIndex];
+			auto &link = design->links[linkIndex];
+			auto linkedNodeIndex = link.directions[linkUpstream].nodeIndex;
+			auto &linkedNode = design->nodes[linkedNodeIndex];
+			if (nodeIndexToLayerIndex[linkedNodeIndex] != layerIndex)
+			{
+				auto loadTmp = 0;
+				auto stageIndex = linkIndicesIndex;
+				if (node.type == Node::select)
+				{
+					auto laneCount = int32_t(node.sources.size());
+					stageIndex -= laneCount * 2;
+				}
+				if (link.type == Link::toBinary && stageIndex == 0)
+				{
+					// grab stage 1 tmp if it's coming from the same layer
+					auto linkIndexNext = node.linkIndices[linkUpstream][linkIndicesIndex + 1];
+					auto &linkNext = design->links[linkIndexNext];
+					auto linkedNodeNextIndex = linkNext.directions[linkUpstream].nodeIndex;
+					if (nodeIndexToLayerIndex[linkedNodeNextIndex] == layerIndex)
+					{
+						stageIndex += 1;
+					}
+				}
+				if (link.type == Link::toBinary && stageIndex > 0)
+				{
+					loadTmp = node.tmps[stageIndex - 1];
+				}
+				doLoad(nodeIndex, workSlotsUsed, linkedNode.sources[link.upstreamOutputIndex], loadTmp);
+				workSlotsUsed += 1;
+				if (link.type == Link::toSelectZero)
+				{
+					doCstore(workSlotsUsed - 1, link);
+				}
+			}
+		};
 		for (int32_t nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
 		{
 			auto nodeIndex = nodeIndices[nodeIndicesIndex];
 			auto &node = design->nodes[nodeIndex];
-			auto doLinkUpstream = [
-				this,
-				nodeIndex,
-				&nodeIndexToLayerIndex,
-				&workSlotsUsed,
-				&doLoad,
-				&doCstore,
-				layerIndex
-			](int32_t linkIndicesIndex) {
-				auto &node = design->nodes[nodeIndex];
-				auto linkIndex = node.linkIndices[linkUpstream][linkIndicesIndex];
-				auto &link = design->links[linkIndex];
-				auto linkedNodeIndex = link.directions[linkUpstream].nodeIndex;
-				auto &linkedNode = design->nodes[linkedNodeIndex];
-				if (nodeIndexToLayerIndex[linkedNodeIndex] != layerIndex)
+			if (node.type == Node::select)
+			{
+				// do zeros first so they don't get inserted between the cond input and its same-layer source
+				auto laneCount = int32_t(node.sources.size());
+				for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
 				{
-					auto loadTmp = 0;
-					auto stageIndex = linkIndicesIndex;
-					if (node.type == Node::select)
-					{
-						auto laneCount = int32_t(node.sources.size());
-						stageIndex -= laneCount * 2;
-					}
-					if (link.type == Link::toBinary && stageIndex == 0)
-					{
-						// grab stage 1 tmp if it's coming from the same layer
-						auto linkIndexNext = node.linkIndices[linkUpstream][linkIndicesIndex + 1];
-						auto &linkNext = design->links[linkIndexNext];
-						auto linkedNodeNextIndex = linkNext.directions[linkUpstream].nodeIndex;
-						if (nodeIndexToLayerIndex[linkedNodeNextIndex] == layerIndex)
-						{
-							stageIndex += 1;
-						}
-					}
-					if (link.type == Link::toBinary && stageIndex > 0)
-					{
-						loadTmp = node.tmps[stageIndex - 1];
-					}
-					doLoad(nodeIndex, workSlotsUsed, linkedNode.sources[link.upstreamOutputIndex], loadTmp);
-					workSlotsUsed += 1;
-					if (link.type == Link::toSelectZero)
-					{
-						doCstore(workSlotsUsed - 1, link);
-					}
-				}
-			};
+					doLinkUpstream(nodeIndex, laneIndex * 2 + 1);
+				};
+			}
+		}
+		for (int32_t nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
+		{
+			auto nodeIndex = nodeIndices[nodeIndicesIndex];
+			auto &node = design->nodes[nodeIndex];
 			if (node.type == Node::select)
 			{
 				auto stageCount = int32_t(node.tmps.size() + 1);
 				auto laneCount = int32_t(node.sources.size());
-				for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
-				{
-					doLinkUpstream(laneIndex * 2 + 1);
-				};
 				for (int32_t stageIndex = 0; stageIndex < stageCount; ++stageIndex)
 				{
-					doLinkUpstream(laneCount * 2 + stageIndex);
+					doLinkUpstream(nodeIndex, laneCount * 2 + stageIndex);
 				};
 				for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
 				{
-					doLinkUpstream(laneIndex * 2);
+					doLinkUpstream(nodeIndex, laneIndex * 2);
 					doCstoreStore(workSlotsUsed - 1, selectStorageSlotSchedule[laneIndex]);
 				};
 			}
@@ -703,7 +712,7 @@ EnergyType State::GetEnergy() const
 			{
 				for (int32_t linkIndicesIndex = 0; linkIndicesIndex < int32_t(node.linkIndices[linkUpstream].size()); ++linkIndicesIndex)
 				{
-					doLinkUpstream(linkIndicesIndex);
+					doLinkUpstream(nodeIndex, linkIndicesIndex);
 				}
 				auto needsStore = false;
 				for (auto linkIndex : node.linkIndices[linkDownstream])

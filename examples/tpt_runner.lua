@@ -74,14 +74,15 @@ require_overlay(function()
 	-- TODO: fix; the constant seed provided here makes the optimization stage deterministic
 	--       but that doesn't include the stages before it, which make the whole process
 	--       non-deterministic due to Lua hash table traversal order noise
-	local optimizer = optimize.make_optimizer(1337)
+	local optimizer = optimize.make_optimizer(1337, 4)
 	local temp_initial = 1
 	local temp_final = 0.95
+	local temp_loss = 1e-7
 	optimizer:state(design:initial(), temp_initial)
-	optimizer:dispatch(temp_final, 1e-7, 1000)
+	optimizer:dispatch(temp_final, temp_loss, 1000)
 	local text_x, text_y = 80, 120
 	local box_size = 5
-	local cancel = Button:new(text_x, text_y + 15, 80, 15, "Cancel")
+	local cancel = Button:new(text_x, text_y + 27, 80, 15, "Cancel")
 	local done = false
 	local function tick()
 		local result, temperature = optimizer:state()
@@ -94,7 +95,7 @@ require_overlay(function()
 				local v = 0.5 + fnv1a32(c .. "isalie") / 0x200000000
 				func, r, g, b = gfx.fillRect, hsv2rgb(h, s, v)
 			end
-			func(text_x + x * (box_size + 1), text_y + 35 + y * (box_size + 1), box_size, box_size, r, g, b, 255)
+			func(text_x + x * (box_size + 1), text_y + 47 + y * (box_size + 1), box_size, box_size, r, g, b, 255)
 		end
 		for i = 1, #slot_states.storage_slot_states do
 			local states = slot_states.storage_slot_states[i]
@@ -110,13 +111,18 @@ require_overlay(function()
 		end
 		local progress = (temperature - temp_initial) / (temp_final - temp_initial)
 		if not done and optimizer:ready() then
-			done = true
-			plot.plot(100, 100, result, extra_parts)
+			done = "Done; "
+			local plan, err = result:plan()
+			if plan then
+				plot.plot(100, 100, result, extra_parts)
+			else
+				done = "Failed: " .. err .. "\n"
+			end
 			tpt.set_pause(0)
 			cancel:text("OK")
 		end
-		local stage = done and "Done" or ("Optimizing; about %i%% done"):format(math.floor(progress * 100))
-		gfx.drawText(text_x, text_y, ("%s; parts: %i; storage used: %i; energy: %.2f"):format(stage, parts, storage_used, energy_linear))
+		local stage = done or ("Optimizing; about %i%% done; "):format(math.floor(progress * 100))
+		gfx.drawText(text_x, text_y, ("%sparts: %i; storage used: %i; energy: %.2f"):format(stage, parts, storage_used, energy_linear))
 	end
 	cancel:action(function()
 		optimizer:cancel()

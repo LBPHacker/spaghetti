@@ -39,6 +39,13 @@ local function keepalive(name, value)
 	end
 end
 
+local function kshift(name, value)
+	integer(name, value)
+	if value < 0 or value > 29 then
+		misc.user_error("%s is not the valid constant shift", name)
+	end
+end
+
 local function payload(name, value)
 	integer(name, value)
 	if value < 0 or value > payload_bits then
@@ -64,5 +71,6 @@ return strict.make_mt_one("spaghetti.check", {
 	payload_bits     = payload_bits,
 	keepalive        = keepalive,
 	payload          = payload,
+	kshift           = kshift,
 	mt               = mt,
 })
