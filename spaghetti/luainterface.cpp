@@ -89,11 +89,122 @@ namespace
 	int StateHandle::EnergyWrapper(lua_State *L)
 	{
 		auto *stateHandle = reinterpret_cast<StateHandle *>(luaL_checkudata(L, 1, StateHandle::mtName));
-		auto energy = stateHandle->state->GetEnergy<Energy>();
-		lua_pushnumber(L, energy.linear);
-		lua_pushinteger(L, energy.storageSlotCount);
-		lua_pushinteger(L, energy.partCount);
-		return 3;
+		const auto &state = *stateHandle->state;
+		auto plan = state.GetEnergy<EnergyWithPlan>();
+		lua_pushnumber(L, plan.linear);
+		lua_pushinteger(L, plan.storageSlotCount);
+		lua_pushinteger(L, plan.partCount);
+		lua_newtable(L);
+		{
+			auto &steps = plan.GetSteps();
+			auto &layers = state.GetLayers();
+			auto *design = state.GetDesign();
+			auto &nodes = design->Nodes();
+			lua_newtable(L);
+			auto storageSlotsIndex = lua_gettop(L);
+			lua_newtable(L);
+			auto workSlotsIndex = lua_gettop(L);
+			auto showStorageSlots = std::max(plan.storageSlotCount, state.GetDesign()->StorageSlots());
+			auto showWorkSlots = design->WorkSlots();
+			int32_t planIndex = 0;
+			struct StorageSlot
+			{
+				int32_t sourceIndex;
+				int32_t usesLeft;
+			};
+			std::vector<StorageSlot> storageSlots(showStorageSlots);
+			auto handleStoragePlanStep = [&storageSlots](auto &step) {
+				if (auto *allocStorage = std::get_if<EnergyWithPlan::AllocStorage>(&step))
+				{
+					storageSlots[allocStorage->storageSlot] = { allocStorage->sourceIndex, allocStorage->uses };
+				}
+				else if (auto *useStorage = std::get_if<EnergyWithPlan::UseStorage>(&step))
+				{
+					if (storageSlots[useStorage->storageSlot].usesLeft > 0)
+					{
+						storageSlots[useStorage->storageSlot].usesLeft -= 1;
+					}
+				}
+			};
+			auto emitStorageSlots = [L, storageSlotsIndex](const std::vector<StorageSlot> &storageSlots) {
+				lua_newtable(L);
+				for (int32_t storageSlotIndex = 0; storageSlotIndex < int32_t(storageSlots.size()); ++storageSlotIndex)
+				{
+					auto &storageSlot = storageSlots[storageSlotIndex];
+					if (storageSlot.usesLeft)
+					{
+						lua_pushinteger(L, storageSlot.sourceIndex);
+					}
+					else
+					{
+						lua_pushnil(L);
+					}
+					lua_rawseti(L, -2, storageSlotIndex + 1);
+				}
+				lua_rawseti(L, storageSlotsIndex, lua_objlen(L, storageSlotsIndex) + 1);
+			};
+			while (true)
+			{
+				auto &step = steps[planIndex];
+				planIndex += 1;
+				if (std::get_if<EnergyWithPlan::Commit>(&step))
+				{
+					break;
+				}
+				handleStoragePlanStep(step);
+			}
+			for (int32_t layerIndex = 1; layerIndex < int32_t(layers.size()) - 1; ++layerIndex)
+			{
+				auto storageSlotsCopy = storageSlots;
+				struct WorkSlotState
+				{
+					std::optional<int32_t> nodeIndex;
+				};
+				std::vector<WorkSlotState> workSlotStates(showWorkSlots);
+				while (true)
+				{
+					auto &step = steps[planIndex];
+					planIndex += 1;
+					if (std::get_if<EnergyWithPlan::Commit>(&step))
+					{
+						break;
+					}
+					else if (auto *load = std::get_if<EnergyWithPlan::Load>(&step))
+					{
+						workSlotStates[load->workSlot].nodeIndex = load->nodeIndex;
+					}
+					else if (auto *cload = std::get_if<EnergyWithPlan::Cload>(&step))
+					{
+						workSlotStates[cload->workSlot].nodeIndex = cload->nodeIndex;
+					}
+					handleStoragePlanStep(step);
+				}
+				emitStorageSlots(storageSlotsCopy);
+				lua_newtable(L);
+				for (int32_t workSlotIndex = 0; workSlotIndex < int32_t(workSlotStates.size()); ++workSlotIndex)
+				{
+					auto &workSlotState = workSlotStates[workSlotIndex];
+					if (workSlotState.nodeIndex)
+					{
+						lua_pushinteger(L, nodes[*workSlotState.nodeIndex].sources[0]);
+					}
+					else
+					{
+						lua_pushnil(L);
+					}
+					lua_rawseti(L, -2, workSlotIndex + 1);
+				}
+				lua_rawseti(L, workSlotsIndex, lua_objlen(L, workSlotsIndex) + 1);
+			}
+			emitStorageSlots(storageSlots);
+			lua_setfield(L, -3, "work_slot_states");
+			lua_setfield(L, -2, "storage_slot_states");
+			lua_pushinteger(L, showWorkSlots);
+			lua_setfield(L, -2, "work_slots");
+			lua_pushinteger(L, showStorageSlots);
+			lua_setfield(L, -2, "storage_slots");
+		}
+		return 4;
 	}
 
 	int StateHandle::PlanWrapper(lua_State *L)
@@ -449,6 +560,7 @@ namespace
 			lua_pushnumber(L, ostate.temperature);
 			return 2;
 		}
+		// TODO: stupid design, fix
 		if (optimizerHandle->optimizer->Dispatched() && optimizerHandle->optimizer->Ready())
 		{
 			optimizerHandle->optimizer->Wait();

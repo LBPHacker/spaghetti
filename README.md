@@ -15,8 +15,12 @@ ninja install # needs write privileges to install_dir
 ## usage
 
 KS adder demo in [here][2].
-```sh
-./examples/ks.lua
+```lua
+loadfile("/path/to/examples/tpt_runner.lua")({
+	-- don't set spaghetti_install_path if you installed spaghetti to your default module path
+	spaghetti_install_path = "/path/to/spaghetti/install/path",
+	design_path            = "/path/to/examples/ks.lua",
+})
 ```
 
 [1]: https://github.com/The-Powder-Toy/The-Powder-Toy

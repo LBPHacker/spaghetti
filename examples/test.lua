@@ -12,7 +12,7 @@ local borv = spaghetti.bor(lhs, rhs)
 bandv:assert(0x10000000, 0x0000FFFF)
 borv:assert(0x10000000, 0x0001FFFF)
 
-spaghetti.build({
+return spaghetti.build({
 	inputs = {
 		[ 1 ] = lhs,
 		[ 3 ] = rhs,
@@ -24,4 +24,15 @@ spaghetti.build({
 	stacks        = 1,
 	storage_slots = 21,
 	work_slots    = 8,
-})
+}), {
+	{ type = elem.DEFAULT_PT_FILT, x = 3, y = -4, ctype = 0x1001DEAD },
+	{ type = elem.DEFAULT_PT_LDTC, x = 3, y = -2 },
+	{ type = elem.DEFAULT_PT_FILT, x = 3, y = -1 },
+	{ type = elem.DEFAULT_PT_FILT, x = 5, y = -4, ctype = 0x1000BEEF },
+	{ type = elem.DEFAULT_PT_LDTC, x = 5, y = -2 },
+	{ type = elem.DEFAULT_PT_FILT, x = 5, y = -1 },
+	{ type = elem.DEFAULT_PT_LDTC, x = 3, y = 2 },
+	{ type = elem.DEFAULT_PT_FILT, x = 3, y = 3 },
+	{ type = elem.DEFAULT_PT_LDTC, x = 5, y = 2 },
+	{ type = elem.DEFAULT_PT_FILT, x = 5, y = 3 },
+}

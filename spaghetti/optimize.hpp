@@ -125,6 +125,22 @@ public:
 
 	std::shared_ptr<State> Initial() const;
 
+	int32_t StorageSlots() const
+	{
+		return storageSlots;
+	}
+
+	int32_t WorkSlots() const
+	{
+		return workSlots;
+	}
+
+	const std::vector<Node> &Nodes() const
+	{
+		return nodes;
+	}
+
+	// TODO: get rid of this nonsense everywhere
 	friend class State;
 	friend class Energy;
 	friend class EnergyWithPlan;
@@ -260,6 +276,7 @@ public:
 
 class EnergyWithPlan : public Energy
 {
+public:
 	struct StepBase
 	{
 		int32_t layerIndex;
@@ -341,6 +358,8 @@ class EnergyWithPlan : public Energy
 		UseStorage,
 		Constant
 	>;
+
+private:
 	std::vector<Step> steps;
 
 	bool outputRemapFailed = false;
@@ -364,6 +383,11 @@ public:
 		}
 	};
 	std::shared_ptr<Plan> ToPlan() const;
+
+	const std::vector<Step> &GetSteps() const
+	{
+		return steps;
+	}
 
 	friend class State;
 	friend std::ostream &operator <<(std::ostream &stream, const State &state);
@@ -389,8 +413,17 @@ public:
 	template<class EnergyType>
 	EnergyType GetEnergy() const;
 
-	friend class Design;
+	const Design *GetDesign() const
+	{
+		return design.get();
+	}
 
+	const std::vector<int32_t> &GetLayers() const
+	{
+		return layers;
+	}
+
+	friend class Design;
 	friend std::ostream &operator <<(std::ostream &stream, const State &state);
 };
 
