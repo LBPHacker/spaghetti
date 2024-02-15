@@ -3,7 +3,9 @@ strict.wrap_env()
 
 local misc = require("spaghetti.misc")
 
-local ctype_bits = 0x3FFFFFFF
+local shift_aware_bits = 0x3FFFFFFF
+local keepalive_bits = 0x3FFFFFFF
+local payload_bits = 0xFFFFFFFF
 
 local function typef(typev, name, value)
 	if type(value) ~= typev then
@@ -30,19 +32,18 @@ local function integer(name, value)
 	end
 end
 
-local function ctype(name, value)
+local function keepalive(name, value)
 	integer(name, value)
-	if value < 0 or value > ctype_bits then
-		misc.user_error("%s is not a ctype", name)
+	if value < 0 or value > keepalive_bits then
+		misc.user_error("%s is not the valid keepalive range", name)
 	end
 end
 
-local function keepalive(name, value)
-	ctype(name, value)
-end
-
 local function payload(name, value)
-	ctype(name, value)
+	integer(name, value)
+	if value < 0 or value > payload_bits then
+		misc.user_error("%s is not the valid payload range", name)
+	end
 end
 
 local function mt(expected_mt, name, value)
@@ -53,14 +54,15 @@ local function mt(expected_mt, name, value)
 end
 
 return strict.make_mt_one("spaghetti.check", {
-	typef      = typef,
-	number     = number,
-	func       = func,
-	table      = tablef,
-	integer    = integer,
-	ctype      = ctype,
-	keepalive  = keepalive,
-	payload    = payload,
-	mt         = mt,
-	ctype_bits = ctype_bits,
+	typef            = typef,
+	number           = number,
+	func             = func,
+	table            = tablef,
+	integer          = integer,
+	shift_aware_bits = shift_aware_bits,
+	keepalive_bits   = keepalive_bits,
+	payload_bits     = payload_bits,
+	keepalive        = keepalive,
+	payload          = payload,
+	mt               = mt,
 })

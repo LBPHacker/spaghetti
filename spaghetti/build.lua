@@ -7,6 +7,7 @@ local graph     = require("spaghetti.graph")
 local misc      = require("spaghetti.misc")
 local id_store  = require("spaghetti.id_store")
 local optimize  = require("spaghetti.optimize")
+local bitx      = require("spaghetti.bitx")
 
 local function hierarchy_up(output_keys, visit)
 	graph.bfs(output_keys, function(expr)
@@ -195,7 +196,7 @@ local function fold_equivalent(outputs, output_slots, inputs)
 		table.insert(expr_to_output_slots[expr], slot)
 	end
 	local function get_constant_value(expr)
-		return bit.bor(expr.keepalive_, expr.payload_)
+		return bitx.bor(expr.keepalive_, expr.payload_)
 	end
 	local constants = {}
 	local function get_constant(value)
@@ -374,7 +375,7 @@ local LSNS_LIFE_3                   = 0x10000003
 
 local function construct_layout(stacks, storage_slots, max_work_slots, outputs, on_progress, mode)
 	local function constant_value(expr)
-		return bit.bor(expr.keepalive_, expr.payload_)
+		return bitx.bor(expr.keepalive_, expr.payload_)
 	end
 	local output_keys = {}
 	for _, param in ipairs(outputs) do

@@ -29,6 +29,7 @@ executable(
 
 install_data(
 	[
+		'bitx.lua',
 		'build.lua',
 		'check.lua',
 		'graph.lua',

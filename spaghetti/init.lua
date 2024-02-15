@@ -1,5 +1,3 @@
-assert(bit, "no bit API, are you running this under luajit?")
-
 local strict = require("spaghetti.strict")
 strict.wrap_env()
 

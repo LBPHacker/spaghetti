@@ -3,6 +3,7 @@ strict.wrap_env()
 
 local build    = require("spaghetti.build")
 local optimize = require("spaghetti.optimize")
+local bitx     = require("spaghetti.bitx")
 
 local pt = setmetatable({}, { __index = function(tbl, key)
 	return elem["DEFAULT_PT_" .. key]
@@ -43,7 +44,7 @@ local particle_macros = {
 			--          fi co p3
 			{ type = pt.CONV, x = stack_index * 3, tmp = pt.FILT, ctype = pt.INSL },
 			--          in co p3
-			{ type = pt.CONV, x = stack_index * 3, tmp = pt.INSL, ctype = bit.bor(pt.FILT, bit.lshift(tmp, sim.PMAPBITS)) },
+			{ type = pt.CONV, x = stack_index * 3, tmp = pt.INSL, ctype = bitx.bor(pt.FILT, bitx.lshift(tmp, sim.PMAPBITS)) },
 			--          fi    p3
 		}
 	end,

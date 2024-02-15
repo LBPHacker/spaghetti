@@ -1270,7 +1270,6 @@ Design::Design(
 		constant.type = Node::constant;
 		auto &constantValue = constantValues[constantIndex];
 		constantValue = newConstantValues[constantIndex];
-		CheckRange(constantValue, 0, 0x40000000);
 		if (constantValue == lsnsLife3Value)
 		{
 			seenLsnsLife3 = true;

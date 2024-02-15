@@ -3,6 +3,7 @@ strict.wrap_env()
 
 local check = require("spaghetti.check")
 local misc  = require("spaghetti.misc")
+local bitx  = require("spaghetti.bitx")
 
 local user_node_m, user_node_i = strict.make_mt("spaghetti.user_node.user_node")
 
@@ -107,10 +108,10 @@ end
 local function check_keepalive_payload(keepalive, payload)
 	check.keepalive("keepalive", keepalive)
 	check.payload("payload", payload)
-	if bit.band(keepalive, payload) ~= 0 then
+	if bitx.band(keepalive, payload) ~= 0 then
 		misc.user_error("keepalive and payload share bits")
 	end
-	if bit.bor(keepalive, payload) == 0 then
+	if bitx.bor(keepalive, payload) == 0 then
 		misc.user_error("keepalive and payload are empty")
 	end
 end
@@ -132,7 +133,8 @@ end
 
 local function make_constant_(keepalive, payload)
 	if payload == nil then
-		payload = 0
+		payload = bitx.band(keepalive, bitx.bxor(check.keepalive_bits, check.payload_bits))
+		keepalive = bitx.band(keepalive, check.keepalive_bits)
 	end
 	check_keepalive_payload(keepalive, payload)
 	local node = make_node("constant")
@@ -207,12 +209,12 @@ end
 add_op("band", {
 	params = { "lhs", "rhs" },
 	payload = function(lhs, rhs)
-		local keepalive = bit.band(lhs.keepalive_, rhs.keepalive_)
-		local payload = bit.band(lhs.payload_, rhs.payload_)
+		local keepalive = bitx.band(lhs.keepalive_, rhs.keepalive_)
+		local payload = bitx.band(lhs.payload_, rhs.payload_)
 		return keepalive, payload
 	end,
 	exec = function(lhs, rhs)
-		return bit.band(lhs, rhs)
+		return bitx.band(lhs, rhs)
 	end,
 	method = "filt_tmp",
 	filt_tmp = 1,
@@ -221,12 +223,12 @@ add_op("band", {
 add_op("bor", {
 	params = { "lhs", "rhs" },
 	payload = function(lhs, rhs)
-		local keepalive = bit.bor(lhs.keepalive_, rhs.keepalive_)
-		local payload = bit.band(bit.bor(lhs.payload_, rhs.payload_), bit.bxor(keepalive, check.ctype_bits))
+		local keepalive = bitx.bor(lhs.keepalive_, rhs.keepalive_)
+		local payload = bitx.band(bitx.bor(lhs.payload_, rhs.payload_), bitx.bxor(keepalive, check.payload_bits))
 		return keepalive, payload
 	end,
 	exec = function(lhs, rhs)
-		return bit.bor(lhs, rhs)
+		return bitx.bor(lhs, rhs)
 	end,
 	method = "filt_tmp",
 	filt_tmp = 2,
@@ -235,12 +237,12 @@ add_op("bor", {
 add_op("bsub", {
 	params = { "lhs", "rhs" },
 	payload = function(lhs, rhs)
-		local keepalive = bit.band(lhs.keepalive_, bit.bxor(rhs.keepalive_, check.ctype_bits))
-		local payload = bit.band(lhs.payload_, bit.bxor(rhs.payload_, check.ctype_bits))
+		local keepalive = bitx.band(lhs.keepalive_, bitx.bxor(rhs.keepalive_, check.keepalive_bits))
+		local payload = bitx.band(lhs.payload_, bitx.bxor(rhs.payload_, check.payload_bits))
 		return keepalive, payload
 	end,
 	exec = function(lhs, rhs)
-		return bit.band(lhs, bit.bxor(rhs, check.ctype_bits))
+		return bitx.band(lhs, bitx.bxor(rhs, check.payload_bits))
 	end,
 	method = "filt_tmp",
 	filt_tmp = 3,
@@ -249,26 +251,26 @@ add_op("bsub", {
 add_op("bxor", {
 	params = { "lhs", "rhs" },
 	payload = function(lhs, rhs)
-		local keepalive = bit.bxor(lhs.keepalive_, rhs.keepalive_)
-		local payload = bit.bor(lhs.payload_, rhs.payload_)
+		local keepalive = bitx.bxor(lhs.keepalive_, rhs.keepalive_)
+		local payload = bitx.bor(lhs.payload_, rhs.payload_)
 		return keepalive, payload
 	end,
 	exec = function(lhs, rhs)
-		return bit.bxor(lhs, rhs)
+		return bitx.bxor(lhs, rhs)
 	end,
 	method = "filt_tmp",
 	filt_tmp = 7,
 	commutative = true,
 })
 local function one_of(lhs, rhs)
-	local keepalive = bit.band(lhs.keepalive_, rhs.keepalive_)
-	local payload = bit.bor(lhs.payload_, rhs.payload_, bit.bxor(lhs.keepalive_, rhs.keepalive_))
+	local keepalive = bitx.band(lhs.keepalive_, rhs.keepalive_)
+	local payload = bitx.bor(lhs.payload_, rhs.payload_, bitx.bxor(lhs.keepalive_, rhs.keepalive_))
 	return keepalive, payload
 end
 local function get_shift(value)
 	local shift = 0
 	for i = 0, 29 do
-		if bit.band(bit.lshift(1, i), value) ~= 0 then
+		if bitx.band(bitx.lshift(1, i), value) ~= 0 then
 			return i
 		end
 	end
@@ -278,14 +280,14 @@ local function get_shifts(rhs)
 	local last = 29
 	local shifts = {}
 	for i = 0, 29 do
-		if bit.band(bit.lshift(1, i), rhs.keepalive_) ~= 0 then
+		if bitx.band(bitx.lshift(1, i), rhs.keepalive_) ~= 0 then
 			last = i
 			table.insert(shifts, i)
 			break
 		end
 	end
 	for i = 0, last - 1 do
-		if bit.band(bit.lshift(1, i), rhs.payload_) ~= 0 then
+		if bitx.band(bitx.lshift(1, i), rhs.payload_) ~= 0 then
 			table.insert(shifts, i)
 		end
 	end
@@ -297,8 +299,8 @@ end
 local function do_shifts(lhs, rhs, func)
 	local keepalive, payload
 	for _, shift in ipairs(get_shifts(rhs)) do
-		local i_keepalive = bit.band(func(lhs.keepalive_, shift), check.ctype_bits)
-		local i_payload = bit.band(func(lhs.payload_, shift), check.ctype_bits)
+		local i_keepalive = bitx.band(func(lhs.keepalive_, shift), check.shift_aware_bits)
+		local i_payload = bitx.band(func(lhs.payload_, shift), check.shift_aware_bits)
 		if keepalive then
 			keepalive, payload = one_of(
 				{ keepalive_ = keepalive, payload_ = payload },
@@ -314,10 +316,10 @@ end
 add_op("lshift", {
 	params = { "lhs", "rhs" },
 	payload = function(lhs, rhs)
-		return do_shifts(lhs, rhs, bit.lshift)
+		return do_shifts(lhs, rhs, bitx.lshift)
 	end,
 	exec = function(lhs, rhs)
-		return bit.band(bit.lshift(lhs, get_shift(rhs)), check.ctype_bits)
+		return bitx.band(bitx.lshift(lhs, get_shift(rhs)), check.shift_aware_bits)
 	end,
 	method = "filt_tmp",
 	filt_tmp = 10,
@@ -326,10 +328,10 @@ add_op("lshift", {
 add_op("rshift", {
 	params = { "lhs", "rhs" },
 	payload = function(lhs, rhs)
-		return do_shifts(lhs, rhs, bit.rshift)
+		return do_shifts(lhs, rhs, bitx.rshift)
 	end,
 	exec = function(lhs, rhs)
-		return bit.band(bit.rshift(lhs, get_shift(rhs)), check.ctype_bits)
+		return bitx.band(bitx.rshift(lhs, get_shift(rhs)), check.shift_aware_bits)
 	end,
 	method = "filt_tmp",
 	filt_tmp = 11,
