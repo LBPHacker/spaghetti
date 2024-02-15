@@ -1,10 +1,7 @@
-#!/usr/bin/env luajit
-
 local strict = require("spaghetti.strict")
 strict.wrap_env()
 
-local spaghetti = require("spaghetti.init") -- lua5.1 is broken and doesn't have ?/init.lua in package.path
-local optimize  = require("spaghetti.optimize")
+local spaghetti = require("spaghetti")
 
 local band     = spaghetti.band
 local bxor     = spaghetti.bxor

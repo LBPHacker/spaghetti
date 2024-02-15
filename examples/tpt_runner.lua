@@ -1,5 +1,15 @@
 local params = ...
 
+local function fnv1a32(data)
+	local hash = 2166136261
+	for i = 1, #data do
+		hash = bit.bxor(hash, data:byte(i))
+		hash = bit.band(bit.lshift(hash, 24), 0xFFFFFFFF) + bit.band(bit.lshift(hash, 8), 0xFFFFFFFF) + hash * 147
+	end
+	hash = bit.band(hash, 0xFFFFFFFF)
+	return hash < 0 and (hash + 0x100000000) or hash
+end
+
 local function hsv2rgb(h, s, v, a) -- [0, 1), [0, 1), [0, 1), [0, 255)
 	a = a or 255
 	local sector = math.floor(h * 6)
@@ -79,7 +89,10 @@ require_overlay(function()
 		local function box_at(x, y, c)
 			local func, r, g, b = gfx.drawRect, 128, 128, 128
 			if c then
-				func, r, g, b = gfx.fillRect, hsv2rgb(((c * 123764.128376) % 72563) / 72563, 0.5, 1)
+				local h = fnv1a32(c .. "thecake") / 0x100000000
+				local s = 0.5
+				local v = 0.5 + fnv1a32(c .. "isalie") / 0x200000000
+				func, r, g, b = gfx.fillRect, hsv2rgb(h, s, v)
 			end
 			func(text_x + x * (box_size + 1), text_y + 35 + y * (box_size + 1), box_size, box_size, r, g, b, 255)
 		end

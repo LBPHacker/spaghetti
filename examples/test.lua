@@ -1,9 +1,7 @@
-#!/usr/bin/env luajit
-
 local strict = require("spaghetti.strict")
 strict.wrap_env()
 
-local spaghetti = require("spaghetti.init") -- lua5.1 is broken and doesn't have ?/init.lua in package.path
+local spaghetti = require("spaghetti")
 
 local lhs = spaghetti.input(0x10000000, 0x0001FFFF)
 local rhs = spaghetti.input(0x10000000, 0x0000FFFF)
