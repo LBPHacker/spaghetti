@@ -83,13 +83,13 @@ require_overlay(function()
 		for i = 1, #slot_states.storage_slot_states do
 			local states = slot_states.storage_slot_states[i]
 			for j = 1, slot_states.storage_slots do
-				box_at(j, i, states[j])
+				box_at(j + slot_states.work_slots + 1, i, states[j])
 			end
 		end
 		for i = 1, #slot_states.work_slot_states do
 			local states = slot_states.work_slot_states[i]
 			for j = 1, slot_states.work_slots do
-				box_at(j + slot_states.storage_slots + 1, i, states[j])
+				box_at(slot_states.work_slots - j + 1, i, states[j])
 			end
 		end
 		local progress = (temperature - temp_initial) / (temp_final - temp_initial)
