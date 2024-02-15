@@ -72,7 +72,7 @@ require_overlay(function()
 	local done = false
 	local function tick()
 		local result, temperature = optimizer:state()
-		local _, _, _, slot_states = result:energy()
+		local energy_linear, storage_used, parts, slot_states = result:energy()
 		local function box_at(x, y, c)
 			local func, r, g, b = gfx.drawRect, 128, 128, 128
 			if c then
@@ -102,7 +102,7 @@ require_overlay(function()
 		if done then
 			gfx.drawText(text_x, text_y, "Done")
 		else
-			gfx.drawText(text_x, text_y, ("Optimizing; temperature: %.3f (about %i%% there)"):format(temperature, math.floor(progress * 100)))
+			gfx.drawText(text_x, text_y, ("Optimizing; about %i%% done; parts: %i; storage used: %i; energy: %.2f"):format(math.floor(progress * 100), parts, storage_used, energy_linear))
 		end
 	end
 	cancel:action(function()
