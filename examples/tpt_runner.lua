@@ -61,6 +61,9 @@ require_overlay(function()
 	local plot = require("spaghetti.plot")
 	local optimize = require("spaghetti.optimize")
 	local design, extra_parts = dofile(params.design_path)
+	-- TODO: fix; the constant seed provided here makes the optimization stage deterministic
+	--       but that doesn't include the stages before it, which make the whole process
+	--       non-deterministic due to Lua hash table traversal order noise
 	local optimizer = optimize.make_optimizer(1337)
 	local temp_initial = 1
 	local temp_final = 0.95
@@ -99,11 +102,8 @@ require_overlay(function()
 			tpt.set_pause(0)
 			cancel:text("OK")
 		end
-		if done then
-			gfx.drawText(text_x, text_y, "Done")
-		else
-			gfx.drawText(text_x, text_y, ("Optimizing; about %i%% done; parts: %i; storage used: %i; energy: %.2f"):format(math.floor(progress * 100), parts, storage_used, energy_linear))
-		end
+		local stage = done and "Done" or ("Optimizing; about %i%% done"):format(math.floor(progress * 100))
+		gfx.drawText(text_x, text_y, ("%s; parts: %i; storage used: %i; energy: %.2f"):format(stage, parts, storage_used, energy_linear))
 	end
 	cancel:action(function()
 		optimizer:cancel()
