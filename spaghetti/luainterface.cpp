@@ -363,6 +363,7 @@ namespace
 		getField("storage_slot_overhead_penalty", storageSlotOverheadPenalty);
 		auto constantValues = getArray("constants");
 		auto inputStorageSlots = getArray("inputs");
+		auto clobberStorageSlots = getArray("clobbers");
 		std::vector<Design::ProtoComposite> composites;
 		{
 			lua_getfield(L, -1, "composites");
@@ -452,6 +453,7 @@ namespace
 			storageSlotOverheadPenalty,
 			constantValues,
 			inputStorageSlots,
+			clobberStorageSlots,
 			composites,
 			outputLinks
 		);

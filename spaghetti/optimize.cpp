@@ -445,11 +445,15 @@ EnergyType State::GetEnergy() const
 	};
 	std::vector<std::optional<int32_t>> slots;
 	std::vector<Storage> storage(design->sources.size());
-	std::vector<int32_t> disallowConstantsInSlots(design->workSlots, 0); // std::vector<bool> is stupid
+	std::vector<int32_t> disallowConstantsInSlots(design->storageSlots, 0); // std::vector<bool> is stupid
 	for (auto &outputLink : design->outputLinks)
 	{
 		storage[outputLink.sourceIndex].outputLinks.push_back(outputLink.storageSlot);
 		disallowConstantsInSlots[outputLink.storageSlot] = 1;
+	}
+	for (auto clobberStorageSlot : design->clobberStorageSlots)
+	{
+		disallowConstantsInSlots[clobberStorageSlot] = 1;
 	}
 	auto allocStorage = [
 		this,
@@ -815,7 +819,8 @@ std::istream &operator >>(std::istream &stream, Design &design)
 	int32_t inputCount;
 	int32_t compositeCount;
 	int32_t outputCount;
-	stream >> workSlots >> storageSlots >> storageSlotOverheadPenalty >> constantCount >> inputCount >> compositeCount >> outputCount >> CheckStream();
+	int32_t clobberCount;
+	stream >> workSlots >> storageSlots >> storageSlotOverheadPenalty >> constantCount >> inputCount >> compositeCount >> outputCount >> clobberCount >> CheckStream();
 	std::vector<int32_t> constantValues(constantCount);
 	for (int32_t constantIndex = 0; constantIndex < constantCount; ++constantIndex)
 	{
@@ -868,12 +873,18 @@ std::istream &operator >>(std::istream &stream, Design &design)
 		auto &outputLink = outputLinks[outputIndex];
 		stream >> outputLink.source >> outputLink.storageSlot >> CheckStream();
 	}
+	std::vector<int32_t> clobberStorageSlots(clobberCount);
+	for (int32_t clobberIndex = 0; clobberIndex < clobberCount; ++clobberIndex)
+	{
+		stream >> clobberStorageSlots[clobberIndex] >> CheckStream();
+	}
 	design = Design(
 		workSlots,
 		storageSlots,
 		storageSlotOverheadPenalty,
 		constantValues,
 		inputStorageSlots,
+		clobberStorageSlots,
 		composites,
 		outputLinks
 	);
@@ -1229,6 +1240,7 @@ Design::Design(
 	double newStorageSlotOverheadPenalty,
 	std::vector<int32_t> newConstantValues,
 	std::vector<int32_t> newInputStorageSlots,
+	std::vector<int32_t> newClobberStorageSlots,
 	std::vector<ProtoComposite> newComposites,
 	std::vector<ProtoOutputLink> newOutputLinks
 )
@@ -1369,6 +1381,12 @@ Design::Design(
 		CheckRange(outputStorageSlot, 0, storageSlots);
 		node.type = Node::output;
 		link(node, outputSource, Link::toOutput);
+	}
+	clobberStorageSlots.resize(newClobberStorageSlots.size());
+	for (int32_t clobberIndex = 0; clobberIndex < int32_t(clobberStorageSlots.size()); ++clobberIndex)
+	{
+		clobberStorageSlots[clobberIndex] = newClobberStorageSlots[clobberIndex];
+		CheckRange(clobberStorageSlots[clobberIndex], 0, storageSlots);
 	}
 }
 

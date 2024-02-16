@@ -381,7 +381,11 @@ end
 local storage_slot_overhead_penalty = 10
 local LSNS_LIFE_3                   = 0x10000003
 
-local function construct_layout(stacks, storage_slots, max_work_slots, outputs, on_progress, mode)
+local function construct_layout(stacks, storage_slots, max_work_slots, outputs, on_progress, clobbers_keys, mode)
+	local clobbers = {}
+	for index in pairs(clobbers_keys) do
+		table.insert(clobbers, index)
+	end
 	local function constant_value(expr)
 		return bitx.bor(expr.keepalive_, expr.payload_)
 	end
@@ -460,7 +464,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 		local buf = {}
 		table.insert(buf, ("%i %i\n"):format(max_work_slots, storage_slots))
 		table.insert(buf, ("%f\n"):format(storage_slot_overhead_penalty))
-		table.insert(buf, ("%i %i %i %i\n"):format(#constants, #inputs, #composites, #outputs))
+		table.insert(buf, ("%i %i %i %i %i\n"):format(#constants, #inputs, #composites, #outputs, #clobbers))
 		for _, expr in ipairs(constants) do
 			table.insert(buf, ("%i "):format(constant_value(expr)))
 		end
@@ -503,6 +507,10 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 			end
 		end
 		table.insert(buf, "\n")
+		for _, index in ipairs(clobbers) do
+			table.insert(buf, ("%i "):format(index - 1))
+		end
+		table.insert(buf, "\n")
 		return table.concat(buf)
 	end
 	local design_params = {
@@ -513,6 +521,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 		inputs                        = {},
 		composites                    = {},
 		outputs                       = {},
+		clobbers                      = {},
 	}
 	for _, expr in ipairs(constants) do
 		table.insert(design_params.constants, constant_value(expr))
@@ -559,6 +568,9 @@ local function construct_layout(stacks, storage_slots, max_work_slots, outputs, 
 			})
 		end
 	end
+	for _, index in ipairs(clobbers) do
+		table.insert(design_params.clobbers, index - 1)
+	end
 	return optimize.make_design(design_params)
 end
 
@@ -568,7 +580,7 @@ local function build(info)
 		check_zeroness(info.output_keys)
 		check_connectivity(info.output_keys, info.inputs)
 		local outputs = preprocess_tree(info.output_keys, info.output_slots, info.inputs)
-		return construct_layout(info.stacks, info.storage_slots, info.work_slots, outputs, info.on_progress, info.mode)
+		return construct_layout(info.stacks, info.storage_slots, info.work_slots, outputs, info.on_progress, info.clobbers, info.mode)
 	end)
 end
 
