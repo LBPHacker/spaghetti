@@ -337,7 +337,7 @@ local function create_parts_(x, y, parts_in, debug)
 	for key, value in audited_pairs(count_at) do
 		if value > 5 then
 			local x, y = xy_key_back(key)
-			sim.createWalls(x, y, 1, 1, 12)
+			sim.createWalls(x, y, 1, 1, sim.walls.DEFAULT_WL_EHOLE)
 		end
 	end
 end
