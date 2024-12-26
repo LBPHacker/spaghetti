@@ -342,6 +342,23 @@ local function create_parts_(x, y, parts_in, debug)
 	local function xy_key_back(k)
 		return k % sim.XRES, math.floor(k / sim.XRES)
 	end
+	do
+		local to_freeze = {}
+		for i = 1, #parts do
+			local x, y = math.floor(parts[i].x / sim.CELL), math.floor(parts[i].y / sim.CELL)
+			to_freeze[xy_key(x, y)] = true
+		end
+		for i = 1, #parts do
+			if not parts[i].freezable then
+				local x, y = math.floor(parts[i].x / sim.CELL), math.floor(parts[i].y / sim.CELL)
+				to_freeze[xy_key(x, y)] = nil
+			end
+		end
+		for key in audited_pairs(to_freeze) do
+			local x, y = xy_key_back(key)
+			sim.createWalls(x * sim.CELL, y * sim.CELL, 1, 1, sim.walls.DEFAULT_WL_STASIS)
+		end
+	end
 	local count_at = {}
 	for i = 1, #parts do
 		if debug and parts[i].print_index then
