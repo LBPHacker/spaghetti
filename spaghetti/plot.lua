@@ -304,21 +304,20 @@ local function create_parts_(x, y, parts_in, debug)
 	end
 	do
 		local new_parts = {}
-		local parts_by_pos = {}
+		local part_state = {}
 		local function xy_key(x, y)
 			return y * sim.XRES + x
 		end
 		for _, part in ipairs(parts) do
 			local key = xy_key(part.x, part.y)
-			local insert = true
-			if parts_by_pos[key] then
-				if part.unstack then
-					insert = false
-				end
-			else
-				parts_by_pos[key] = part
+			if not part.unstack then
+				part_state[key] = "strong"
 			end
-			if insert then
+		end
+		for _, part in ipairs(parts) do
+			local key = xy_key(part.x, part.y)
+			if not part.unstack or part_state[key] ~= "strong" then
+				part_state[key] = "strong"
 				table.insert(new_parts, part)
 			end
 		end
