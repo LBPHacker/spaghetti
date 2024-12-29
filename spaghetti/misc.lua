@@ -29,6 +29,20 @@ local function user_error(...)
 	end
 end
 
+local function user_stack()
+	local stack = {}
+	local level = 2
+	while true do
+		local info = assert(debug.getinfo(level), "cannot find the topmost user frame")
+		if info.source == forward_frame_name then
+			break
+		end
+		table.insert(stack, info)
+		level = level + 1
+	end
+	return stack
+end
+
 local function user_frame_name()
 	local _, err = pcall(user_error, "@")
 	return err:match("^(.*): @$") or "[cannot determine user frame name]"
@@ -175,6 +189,7 @@ end
 return {
 	user_wrap       = user_wrap,
 	user_error      = user_error,
+	user_stack      = user_stack,
 	user_frame_name = user_frame_name,
 	call_site_name  = call_site_name,
 	shared_key      = shared_key,
