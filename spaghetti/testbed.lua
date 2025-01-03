@@ -46,7 +46,7 @@ local function modulef(info)
 			if fuzz_expect then
 				for _, output_info in ipairs(info_outputs) do
 					local expect_value = fuzz_expect[output_info.name]
-					if not expect_value then
+					if expect_value == nil then
 						return nil, ("output %s expected value unset"):format(output_info.name)
 					end
 					if expect_value ~= false and ctype_at(slot_pos(output_info.index), 2 + probe_length) ~= expect_value then
