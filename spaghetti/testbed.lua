@@ -46,11 +46,17 @@ local function modulef(info)
 			if fuzz_expect then
 				for _, output_info in ipairs(info_outputs) do
 					local expect_value = fuzz_expect[output_info.name]
+					local expect_mask = 0xFFFFFFFF
+					if type(expect_value) == "table" then
+						expect_mask = expect_value.mask
+						expect_value = expect_value.value
+					end
 					if expect_value == nil then
 						return nil, ("output %s expected value unset"):format(output_info.name)
 					end
-					if expect_value ~= false and ctype_at(slot_pos(output_info.index), 2 + probe_length) ~= expect_value then
-						return nil, ("output %s expected to have value %08X"):format(output_info.name, expect_value)
+					local got_value = ctype_at(slot_pos(output_info.index), 2 + probe_length)
+					if expect_value ~= false and bitx.band(bitx.bxor(got_value, expect_value), expect_mask) ~= 0 then
+						return nil, ("output %s expected to have value %08X with mask %08X"):format(output_info.name, expect_value, expect_mask)
 					end
 				end
 			end
@@ -76,6 +82,9 @@ local function modulef(info)
 			end
 			for _, output_info in ipairs(info_outputs) do
 				local expect_value = output_values[output_info.name]
+				if type(expect_value) == "table" then
+					expect_value = expect_value.value
+				end
 				if expect_value then
 					if output_info.never_zero then
 						if expect_value == 0 then
