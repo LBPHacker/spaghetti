@@ -222,7 +222,7 @@ local function run(params)
 				if plan then
 					final_state.stacks_used = plan.stacks_used
 					if in_tpt then
-						plot.plan(plot_x, plot_y, plan, info.extra_parts, params.debug)
+						plot.plan(plot_x, plot_y, plan, info.extra_parts, {}, params.debug)
 					end
 					if fuzz and module.fuzz and in_tpt then
 						runner_state = "fuzzing"

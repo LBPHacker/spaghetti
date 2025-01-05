@@ -7,6 +7,12 @@ shared_library(
 	dependencies: [
 		dependency('lua5.1'),
 	],
+	override_options: [
+		'c_std=c99',
+		'cpp_std=c++17',
+		'cpp_rtti=false',
+		'warning_level=3',
+	],
 	name_prefix: '',
 	install: true,
 	install_dir: install_dir,
