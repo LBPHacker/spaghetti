@@ -14,6 +14,9 @@ local function modulef(info)
 	local fuzz
 	local probe_length = info.probe_length or 1
 	local function slot_pos(index)
+		if index < 0 then
+			return -3 - (-index - 1) * 2
+		end
 		return info.stacks * 2 + index
 	end
 	local stack_max_size = info.stack_max_size or 1500

@@ -553,20 +553,33 @@ EnergyType State::GetEnergy() const
 		int32_t from, to;
 	};
 	std::vector<OutputRemap> outputRemaps;
+	struct OutputWorkRemap
+	{
+		int32_t from, to;
+	};
+	std::vector<OutputWorkRemap> outputWorkRemaps;
 	auto nodeIndexToLayerIndex = NodeIndexToLayerIndex();
 	struct Storage
 	{
 		int32_t usesLeft = 0;
 		int32_t slotIndex = -1;
 		std::vector<int32_t> outputLinks;
+		std::vector<int32_t> workOutputLinks;
 	};
 	std::vector<std::optional<int32_t>> slots;
 	std::vector<Storage> storage(design->sources.size());
 	std::vector<int32_t> disallowConstantsInSlots(design->storageSlots, 0); // std::vector<bool> is stupid
 	for (auto &outputLink : design->outputLinks)
 	{
-		storage[outputLink.sourceIndex].outputLinks.push_back(outputLink.storageSlot);
-		disallowConstantsInSlots[outputLink.storageSlot] = 1;
+		if (auto *storeSlotOutputLink = std::get_if<Design::StorageSlotOutputLink>(&outputLink))
+		{
+			storage[storeSlotOutputLink->sourceIndex].outputLinks.push_back(storeSlotOutputLink->storageSlot);
+			disallowConstantsInSlots[storeSlotOutputLink->storageSlot] = 1;
+		}
+		if (auto *workSlotOutputLink = std::get_if<Design::WorkSlotOutputLink>(&outputLink))
+		{
+			storage[workSlotOutputLink->sourceIndex].workOutputLinks.push_back(workSlotOutputLink->workSlot);
+		}
 	}
 	for (auto clobberStorageSlot : design->clobberStorageSlots)
 	{
@@ -581,6 +594,7 @@ EnergyType State::GetEnergy() const
 	auto allocStorage = [
 		this,
 		&outputRemaps,
+		&outputWorkRemaps,
 		&energy,
 		&storage,
 		&disallowConstantsInSlots,
@@ -641,6 +655,10 @@ EnergyType State::GetEnergy() const
 				{
 					outputRemaps.push_back({ *freeSlotIndex, slotIndex });
 				}
+			}
+			for (auto slotIndex : storage[sourceIndex].workOutputLinks)
+			{
+				outputWorkRemaps.push_back({ *freeSlotIndex, slotIndex });
 			}
 			auto uses = design->sources[sourceIndex].uses;
 			if (usage == usageConstant)
@@ -921,15 +939,30 @@ EnergyType State::GetEnergy() const
 		{
 			energy.outputRemapFailed = true;
 		}
-		else if (outputRemaps.size())
+		else if (outputRemaps.size() || outputWorkRemaps.size())
 		{
+			std::vector<int32_t> outputWorkRemapsFrom(design->workSlots, -1);
+			for (int32_t outputWorkRemapIndex = 0; outputWorkRemapIndex < int(outputWorkRemaps.size()); ++outputWorkRemapIndex)
+			{
+				auto &outputWorkRemap = outputWorkRemaps[outputWorkRemapIndex];
+				outputWorkRemapsFrom[outputWorkRemap.to] = outputWorkRemap.from;
+			}
 			auto layerIndex = int32_t(layers.size()) - 1;
 			energy.steps.push_back(EnergyWithPlan::Mode{ { layerIndex }, 0, 0 });
-			for (int32_t outputRemapIndex = 0; outputRemapIndex < int32_t(outputRemaps.size()); ++outputRemapIndex)
+			int32_t outputRemapIndex = 0;
+			for (int32_t workSlotIndex = 0; workSlotIndex < design->workSlots; ++workSlotIndex)
 			{
-				auto &outputRemap = outputRemaps[outputRemapIndex];
-				energy.steps.push_back(EnergyWithPlan::Load{ { layerIndex }, -1, 0, outputRemapIndex, outputRemap.from });
-				energy.steps.push_back(EnergyWithPlan::Store{ { layerIndex }, outputRemapIndex, outputRemap.to });
+				if (outputWorkRemapsFrom[workSlotIndex] != -1)
+				{
+					energy.steps.push_back(EnergyWithPlan::Load{ { layerIndex }, -1, 0, workSlotIndex, outputWorkRemapsFrom[workSlotIndex] });
+				}
+				else if (outputRemapIndex < int32_t(outputRemaps.size()))
+				{
+					auto &outputRemap = outputRemaps[outputRemapIndex];
+					energy.steps.push_back(EnergyWithPlan::Load{ { layerIndex }, -1, 0, workSlotIndex, outputRemap.from });
+					energy.steps.push_back(EnergyWithPlan::Store{ { layerIndex }, workSlotIndex, outputRemap.to });
+					outputRemapIndex += 1;
+				}
 			}
 			energy.steps.push_back(EnergyWithPlan::Commit{ layerIndex });
 		}
@@ -1399,14 +1432,29 @@ Design::Design(
 	{
 		auto nodeIndex = constantCount + inputCount + compositeCount + outputIndex;
 		auto &node = nodes[nodeIndex];
-		auto &outputSource = outputLinks[outputIndex].sourceIndex;
-		auto &outputStorageSlot = outputLinks[outputIndex].storageSlot;
-		outputSource = newOutputLinks[outputIndex].source;
-		outputStorageSlot = newOutputLinks[outputIndex].storageSlot;
-		CheckRange(outputSource, 0, sources.size());
-		CheckRange(outputStorageSlot, 0, storageSlots);
+		CheckRange(newOutputLinks[outputIndex].source, 0, sources.size());
+		if (newOutputLinks[outputIndex].storageSlot < 0)
+		{
+			WorkSlotOutputLink outputLink;
+			auto &outputSource = outputLink.sourceIndex;
+			auto &outputWorkSlot = outputLink.workSlot;
+			outputSource = newOutputLinks[outputIndex].source;
+			CheckRange(newOutputLinks[outputIndex].storageSlot, -workSlots, 0);
+			outputWorkSlot = -newOutputLinks[outputIndex].storageSlot - 1;
+			outputLinks[outputIndex] = outputLink;
+		}
+		else
+		{
+			StorageSlotOutputLink outputLink;
+			auto &outputSource = outputLink.sourceIndex;
+			auto &outputStorageSlot = outputLink.storageSlot;
+			outputSource = newOutputLinks[outputIndex].source;
+			outputStorageSlot = newOutputLinks[outputIndex].storageSlot - 1;
+			CheckRange(outputStorageSlot, 0, storageSlots);
+			outputLinks[outputIndex] = outputLink;
+		}
 		node.type = Node::output;
-		link(node, outputSource, Link::toOutput);
+		link(node, newOutputLinks[outputIndex].source, Link::toOutput);
 	}
 	clobberStorageSlots.resize(newClobberStorageSlots.size());
 	for (int32_t clobberIndex = 0; clobberIndex < int32_t(clobberStorageSlots.size()); ++clobberIndex)

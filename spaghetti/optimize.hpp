@@ -79,11 +79,20 @@ class Design : public std::enable_shared_from_this<Design>
 	std::vector<int32_t> inputStorageSlots;
 	std::vector<int32_t> clobberStorageSlots;
 	std::vector<int32_t> voidStorageSlots;
-	struct OutputLink
+	struct StorageSlotOutputLink
 	{
 		int32_t sourceIndex;
 		int32_t storageSlot;
 	};
+	struct WorkSlotOutputLink
+	{
+		int32_t sourceIndex;
+		int32_t workSlot;
+	};
+	using OutputLink = std::variant<
+		StorageSlotOutputLink,
+		WorkSlotOutputLink
+	>;
 	std::vector<OutputLink> outputLinks;
 	std::vector<Source> sources;
 

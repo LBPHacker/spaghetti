@@ -127,7 +127,7 @@ local function check_info(info)
 	for key, value in audited_pairs(info.inputs) do
 		local keyname = "info.inputs key " .. tostring(key)
 		check.integer(keyname, key)
-		if key < 0 or key > info.storage_slots then
+		if key < 1 or key > info.storage_slots then
 			misc.user_error("%s is out of bounds", keyname)
 		end
 		local valuename = "info.inputs[" .. key .. "]"
@@ -140,8 +140,15 @@ local function check_info(info)
 	for key, value in audited_pairs(info.outputs) do
 		local keyname = "info.outputs key " .. tostring(key)
 		check.integer(keyname, key)
-		if key < 0 or key > info.storage_slots then
-			misc.user_error("%s is out of bounds", keyname)
+		if key < 0 then
+			local offset = -key
+			if offset < 1 or offset > info.work_slots then
+				misc.user_error("%s is out of bounds", keyname)
+			end
+		else
+			if key < 1 or key > info.storage_slots then
+				misc.user_error("%s is out of bounds", keyname)
+			end
 		end
 		local valuename = "info.outputs[" .. key .. "]"
 		check.mt(user_node.mt_, valuename, value)
@@ -543,7 +550,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, stack_max
 		for _, output_slot in ipairs(output_slots) do
 			table.insert(design_params.outputs, {
 				source       = source_index,
-				storage_slot = output_slot - 1,
+				storage_slot = output_slot,
 			})
 		end
 	end
