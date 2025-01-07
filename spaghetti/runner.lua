@@ -291,7 +291,7 @@ local function run(params)
 				table.insert(str, ("; stacks used: %i"):format(state.stacks_used))
 			end
 		end
-		table.insert(str, ("; parts: %i; storage used: %i; energy: %.2f"):format(state.parts, state.storage_used, state.energy_linear))
+		table.insert(str, ("; parts: %i; work slots used: %i; storage slots used: %i; energy: %.2f"):format(state.parts, state.slot_states.work_slots, state.storage_used, state.energy_linear))
 		if runner_state ~= "optimizing" then
 			if failed then
 				table.insert(str, ("\nPlanning failed: %s"):format(failed))
