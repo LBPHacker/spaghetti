@@ -215,6 +215,8 @@ local function modulef(info)
 				stacks         = info.stacks,
 				storage_slots  = info.storage_slots,
 				work_slots     = info.work_slots,
+				storage_slot_overhead_penalty = info.opt_params.storage_slot_overhead_penalty,
+				work_slot_overhead_penalty    = info.opt_params.work_slot_overhead_penalty,
 				stack_max_size = stack_max_size,
 			}),
 			extra_parts = extra_parts,

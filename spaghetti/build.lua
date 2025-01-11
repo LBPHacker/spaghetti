@@ -116,6 +116,22 @@ local function check_info(info)
 	if info.work_slots < 2 then
 		misc.user_error("info.work_slots is out of bounds")
 	end
+	local storage_slot_overhead_penalty = info.storage_slot_overhead_penalty
+	if storage_slot_overhead_penalty == nil then
+		storage_slot_overhead_penalty = 10
+	end
+	check.integer("info.storage_slot_overhead_penalty", storage_slot_overhead_penalty)
+	if storage_slot_overhead_penalty < 0 then
+		misc.user_error("info.storage_slot_overhead_penalty is out of bounds")
+	end
+	local work_slot_overhead_penalty = info.work_slot_overhead_penalty
+	if work_slot_overhead_penalty == nil then
+		work_slot_overhead_penalty = 10
+	end
+	check.integer("info.work_slot_overhead_penalty", work_slot_overhead_penalty)
+	if work_slot_overhead_penalty < 0 then
+		misc.user_error("info.work_slot_overhead_penalty is out of bounds")
+	end
 	check.integer("info.stack_max_size", info.stack_max_size)
 	if info.stack_max_size < 10 or info.stack_max_size > 1500 then
 		misc.user_error("info.stack_max_size is out of bounds")
@@ -228,6 +244,8 @@ local function check_info(info)
 		on_progress    = info.on_progress,
 		clobbers       = clobbers,
 		voids          = voids,
+		storage_slot_overhead_penalty = storage_slot_overhead_penalty,
+		work_slot_overhead_penalty    = work_slot_overhead_penalty,
 	}
 end
 
@@ -445,11 +463,9 @@ local function preprocess_tree(output_keys, output_slots, inputs)
 	return outputs
 end
 
-local storage_slot_overhead_penalty = 10
-local work_slot_overhead_penalty    = 10
-local LSNS_LIFE_3                   = 0x10000003
+local LSNS_LIFE_3 = 0x10000003
 
-local function construct_layout(stacks, storage_slots, max_work_slots, stack_max_size, outputs, on_progress, clobbers_keys, voids_keys)
+local function construct_layout(stacks, storage_slots, max_work_slots, stack_max_size, outputs, on_progress, clobbers_keys, voids_keys, storage_slot_overhead_penalty, work_slot_overhead_penalty)
 	local clobbers = {}
 	for index in audited_pairs(clobbers_keys) do
 		table.insert(clobbers, index)
@@ -733,7 +749,7 @@ local function build(info)
 		check_zeroness(info.output_keys)
 		check_connectivity(info.output_keys, info.inputs)
 		local outputs = preprocess_tree(info.output_keys, info.output_slots, info.inputs)
-		return construct_layout(info.stacks, info.storage_slots, info.work_slots, info.stack_max_size, outputs, info.on_progress, info.clobbers, info.voids)
+		return construct_layout(info.stacks, info.storage_slots, info.work_slots, info.stack_max_size, outputs, info.on_progress, info.clobbers, info.voids, info.storage_slot_overhead_penalty, info.work_slot_overhead_penalty)
 	end)
 end
 
