@@ -157,6 +157,7 @@ local function modulef(info)
 			probes = params.probes
 		end
 		local inputs = {}
+		local input_initials = {}
 		local outputs = {}
 		local extra_parts = {}
 		local named_inputs = {}
@@ -177,6 +178,7 @@ local function modulef(info)
 				end
 			end
 			inputs[input_info.index] = expr
+			input_initials[expr] = input_info.initial
 		end
 		local named_outputs = instantiate(named_inputs, params)
 		for output_index, output_info in ipairs(info_outputs) do
@@ -209,6 +211,7 @@ local function modulef(info)
 		return {
 			design = spaghetti.build({
 				inputs         = inputs,
+				input_initials = input_initials,
 				outputs        = outputs,
 				clobbers       = clobbers,
 				voids          = voids,

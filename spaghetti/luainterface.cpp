@@ -420,6 +420,7 @@ namespace
 		auto workSlotOverheadPenalty = GetField<double>(L, "work_slot_overhead_penalty");
 		auto constantValues = GetArray<int32_t>(L, "constants");
 		auto inputStorageSlots = GetArray<int32_t>(L, "inputs");
+		auto inputInitials = GetArray<int32_t>(L, "input_initials");
 		auto clobberStorageSlots = GetArray<int32_t>(L, "clobbers");
 		auto voidStorageSlots = GetArray<int32_t>(L, "voids");
 		std::vector<Design::ProtoComposite> composites;
@@ -513,6 +514,7 @@ namespace
 				workSlotOverheadPenalty,
 				constantValues,
 				inputStorageSlots,
+				inputInitials,
 				clobberStorageSlots,
 				voidStorageSlots,
 				composites,

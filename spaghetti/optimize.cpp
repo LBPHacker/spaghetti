@@ -385,7 +385,7 @@ std::shared_ptr<Plan> EnergyWithPlan::ToPlan() const
 	}
 	for (int32_t inputIndex = 0; inputIndex < design->inputCount; ++inputIndex)
 	{
-		constantValue[design->inputStorageSlots[inputIndex]] = 0xF000C0DE;
+		constantValue[design->inputStorageSlots[inputIndex]] = design->inputInitials[inputIndex];
 	}
 	for (auto &step : steps)
 	{
@@ -1294,6 +1294,7 @@ Design::Design(
 	double newWorkSlotOverheadPenalty,
 	std::vector<int32_t> newConstantValues,
 	std::vector<int32_t> newInputStorageSlots,
+	std::vector<int32_t> newInputInitials,
 	std::vector<int32_t> newClobberStorageSlots,
 	std::vector<int32_t> newVoidStorageSlots,
 	std::vector<ProtoComposite> newComposites,
@@ -1309,6 +1310,7 @@ Design::Design(
 	storageSlotOverheadPenalty = newStorageSlotOverheadPenalty;
 	workSlotOverheadPenalty = newWorkSlotOverheadPenalty;
 	inputCount = newInputStorageSlots.size();
+	CheckRange(newInputInitials.size(), inputCount, inputCount + 1);
 	compositeCount = newComposites.size();
 	outputCount = newOutputLinks.size();
 	CheckRange(stacks, 1, bigNumber);
@@ -1358,6 +1360,7 @@ Design::Design(
 	}
 	CheckRange(seenLsnsLife3 ? 1 : 0, 1, 2);
 	inputStorageSlots.resize(inputCount);
+	inputInitials.resize(inputCount);
 	for (int32_t inputIndex = 0; inputIndex < inputCount; ++inputIndex)
 	{
 		auto nodeIndex = constantCount + inputIndex;
@@ -1365,6 +1368,8 @@ Design::Design(
 		input.type = Node::input;
 		auto &inputStorageSlot = inputStorageSlots[inputIndex];
 		inputStorageSlot = newInputStorageSlots[inputIndex];
+		auto &inputInitial = inputInitials[inputIndex];
+		inputInitial = newInputInitials[inputIndex];
 		CheckRange(inputStorageSlot, 0, storageSlots);
 		presentSource(nodeIndex, 0);
 	}

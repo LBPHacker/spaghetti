@@ -77,6 +77,7 @@ class Design : public std::enable_shared_from_this<Design>
 	std::vector<Link> links;
 	std::vector<int32_t> constantValues;
 	std::vector<int32_t> inputStorageSlots;
+	std::vector<int32_t> inputInitials;
 	std::vector<int32_t> clobberStorageSlots;
 	std::vector<int32_t> voidStorageSlots;
 	struct StorageSlotOutputLink
@@ -137,6 +138,7 @@ public:
 		double newWorkSlotOverheadPenalty,
 		std::vector<int32_t> newConstantValues,
 		std::vector<int32_t> newInputStorageSlots,
+		std::vector<int32_t> newInputInitials,
 		std::vector<int32_t> newClobberStorageSlots,
 		std::vector<int32_t> newVoidStorageSlots,
 		std::vector<ProtoComposite> newComposites,

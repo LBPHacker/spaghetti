@@ -139,6 +139,13 @@ local function check_info(info)
 	if info.on_progress ~= nil then
 		check.func("info.on_progress", info.on_progress)
 	end
+	local input_initials
+	if info.input_initials ~= nil then
+		check.table("info.input_initials", info.input_initials)
+		input_initials = info.input_initials
+	else
+		input_initials = {}
+	end
 	check.table("info.inputs", info.inputs)
 	for key, value in audited_pairs(info.inputs) do
 		local keyname = "info.inputs key " .. tostring(key)
@@ -239,6 +246,7 @@ local function check_info(info)
 		work_slots     = info.work_slots,
 		stack_max_size = info.stack_max_size,
 		inputs         = info.inputs,
+		input_initials = input_initials,
 		output_slots   = output_slots,
 		output_keys    = output_keys,
 		on_progress    = info.on_progress,
@@ -465,7 +473,7 @@ end
 
 local LSNS_LIFE_3 = 0x10000003
 
-local function construct_layout(stacks, storage_slots, max_work_slots, stack_max_size, outputs, on_progress, clobbers_keys, voids_keys, storage_slot_overhead_penalty, work_slot_overhead_penalty)
+local function construct_layout(stacks, storage_slots, max_work_slots, stack_max_size, outputs, on_progress, clobbers_keys, voids_keys, storage_slot_overhead_penalty, work_slot_overhead_penalty, original_inputs, input_initials)
 	local clobbers = {}
 	for index in audited_pairs(clobbers_keys) do
 		table.insert(clobbers, index)
@@ -554,6 +562,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, stack_max
 		work_slot_overhead_penalty    = work_slot_overhead_penalty,
 		constants                     = {},
 		inputs                        = {},
+		input_initials                = {},
 		composites                    = {},
 		outputs                       = {},
 		clobbers                      = {},
@@ -578,6 +587,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, stack_max
 	end
 	for _, expr in ipairs(inputs) do
 		table.insert(design_params.inputs, expr.input_index_ - 1)
+		table.insert(design_params.input_initials, input_initials[original_inputs[expr.input_index_]] or 0xF000C0DE)
 	end
 	for _, expr in ipairs(composites) do
 		if expr.info_.method == "filt_tmp" then
@@ -749,7 +759,7 @@ local function build(info)
 		check_zeroness(info.output_keys)
 		check_connectivity(info.output_keys, info.inputs)
 		local outputs = preprocess_tree(info.output_keys, info.output_slots, info.inputs)
-		return construct_layout(info.stacks, info.storage_slots, info.work_slots, info.stack_max_size, outputs, info.on_progress, info.clobbers, info.voids, info.storage_slot_overhead_penalty, info.work_slot_overhead_penalty)
+		return construct_layout(info.stacks, info.storage_slots, info.work_slots, info.stack_max_size, outputs, info.on_progress, info.clobbers, info.voids, info.storage_slot_overhead_penalty, info.work_slot_overhead_penalty, info.inputs, info.input_initials)
 	end)
 end
 
