@@ -291,9 +291,6 @@ local function fold_equivalent(outputs, output_slots, inputs)
 		end
 		table.insert(expr_to_output_slots[expr], slot)
 	end
-	local function get_constant_value(expr)
-		return bitx.bor(expr.keepalive_, expr.payload_)
-	end
 	local constants = {}
 	local function get_constant(value)
 		if not constants[value] then
@@ -328,7 +325,7 @@ local function fold_equivalent(outputs, output_slots, inputs)
 		end
 		new_expr.output_slots_ = { {} }
 		if expr.type_ == "constant" then
-			new_expr = get_constant(get_constant_value(expr))
+			new_expr = get_constant(expr:constant_value_())
 		elseif expr.type_ == "composite" then
 			new_expr.params_ = {}
 			local fold_to_constant = true
@@ -336,7 +333,7 @@ local function fold_equivalent(outputs, output_slots, inputs)
 			for index, name in ipairs(expr.info_.params) do
 				local new_param = get_lifted(expr.params_[name])
 				if new_param.node.type_ == "constant" then
-					constant_params[index] = get_constant_value(new_param.node)
+					constant_params[index] = new_param.node:constant_value_()
 				else
 					fold_to_constant = false
 				end
@@ -518,6 +515,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, stack_max
 			table.insert(inputs, expr)
 		else
 			table.insert(composites, expr)
+			expr:derive_fed_value_()
 		end
 		return true
 	end
@@ -726,6 +724,9 @@ function debug_info_i:dump_graph(handle, with_constants)
 	hierarchy_up(self.output_keys, function(expr)
 		if with_constants or expr.type_ ~= "constant" then
 			local locations = deduplicate_locations(tostring(expr))
+			if expr.fed_value_ then
+				table.insert(locations, ("=%08X"):format(expr.fed_value_))
+			end
 			assert(handle:write(("%i [label=%s]\n"):format(node_ids:get(expr), to_dot_string(table.concat(locations, "\n")))))
 			assert(handle:write(("%i\n"):format(node_ids:get(expr))))
 		end

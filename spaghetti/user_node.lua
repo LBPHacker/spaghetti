@@ -98,6 +98,24 @@ function user_node_i:check_inputs_()
 	end
 end
 
+function user_node_i:derive_fed_value_()
+	assert(self.type_ == "composite")
+	local params = {}
+	for index, name in ipairs(self.info_.params) do
+		local parent = self.params_[name].node
+		if not parent.fed_value_ then
+			return
+		end
+		table.insert(params, parent.fed_value_)
+	end
+	self.fed_value_ = self.info_.exec(unpack(params))
+end
+
+function user_node_i:constant_value_()
+	assert(self.type_ == "constant")
+	return bitx.bor(self.keepalive_, self.payload_)
+end
+
 function user_node_i:label(label)
 	self.label_ = label
 	return self
@@ -143,6 +161,25 @@ function user_node_i:force(keepalive, payload)
 	return self
 end
 
+function user_node_i:feed_(fed_value)
+	if self.type_ ~= "input" then
+		misc.user_error("only inputs can be fed")
+	end
+	check.integer("fed_value", fed_value)
+	if bitx.band(fed_value, self.keepalive_) ~= self.keepalive_ or
+	   bitx.band(fed_value, bitx.bor(self.keepalive_, self.payload_)) ~= fed_value then
+		return nil, ("fed value %08X does not conform to keepalive/payload %08X/%08X"):format(fed_value, self.keepalive_, self.payload_)
+	end
+	self.fed_value_ = fed_value
+	return self
+end
+
+function user_node_i:feed(fed_value)
+	return misc.user_wrap(function()
+		return self:feed_(fed_value)
+	end)
+end
+
 local function make_node(typev)
 	return setmetatable({
 		type_            = typev,
@@ -151,6 +188,7 @@ local function make_node(typev)
 		select_group_    = false,
 		output_count_    = 1,
 		tag_             = false,
+		fed_value_       = false,
 	}, user_node_m)
 end
 
@@ -171,6 +209,7 @@ local function make_constant_(keepalive, payload)
 	node.payload_    = payload
 	node.terminal_   = true
 	node.label_      = default_label()
+	node.fed_value_  = node:constant_value_()
 	if bitx.band(bitx.bor(keepalive, payload), check.keepalive_bits) ~= 0 then
 		node:never_zero()
 	end
