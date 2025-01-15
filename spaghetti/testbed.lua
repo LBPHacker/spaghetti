@@ -47,19 +47,29 @@ local function modulef(info)
 		math.randomseed(os.time())
 		function fuzz(fuzz_expect, ctype_at, params)
 			if fuzz_expect then
+				local output_values = {}
 				for _, output_info in ipairs(info_outputs) do
-					local expect_value = fuzz_expect[output_info.name]
-					local expect_mask = 0xFFFFFFFF
-					if type(expect_value) == "table" then
-						expect_mask = expect_value.mask
-						expect_value = expect_value.value
+					output_values[output_info.name] = ctype_at(slot_pos(output_info.index), 2 + probe_length)
+				end
+				if fuzz_expect.implicit then
+					local ok, err = info.fuzz_outputs_implicit(fuzz_expect.values, output_values, params)
+					if not ok then
+						return nil, ("outputs failed implicit check: %s"):format(err)
 					end
-					if expect_value == nil then
-						return nil, ("output %s expected value unset"):format(output_info.name)
-					end
-					local got_value = ctype_at(slot_pos(output_info.index), 2 + probe_length)
-					if expect_value ~= false and bitx.band(bitx.bxor(got_value, expect_value), expect_mask) ~= 0 then
-						return nil, ("output %s expected to have value %08X with mask %08X"):format(output_info.name, expect_value, expect_mask)
+				else
+					for _, output_info in ipairs(info_outputs) do
+						local expect_value = fuzz_expect.values[output_info.name]
+						local expect_mask = 0xFFFFFFFF
+						if type(expect_value) == "table" then
+							expect_mask = expect_value.mask
+							expect_value = expect_value.value
+						end
+						if expect_value == nil then
+							return nil, ("output %s expected value unset"):format(output_info.name)
+						end
+						if expect_value ~= false and bitx.band(bitx.bxor(output_values[output_info.name], expect_value), expect_mask) ~= 0 then
+							return nil, ("output %s expected to have value %08X with mask %08X"):format(output_info.name, expect_value, expect_mask)
+						end
 					end
 				end
 			end
@@ -75,33 +85,39 @@ local function modulef(info)
 			for _, input_info in ipairs(info_inputs) do
 				ctype_at(slot_pos(input_info.index), -probe_length - 3, input_values[input_info.name])
 			end
-			local output_values
-			do
-				local err
-				output_values, err = info.fuzz_outputs(input_values, params)
-				if not output_values then
-					return nil, ("failed to generate outputs: %s"):format(err)
+			local result
+			if info.fuzz_outputs_implicit then
+				result = { implicit = true, values = input_values }
+			else
+				local output_values
+				do
+					local err
+					output_values, err = info.fuzz_outputs(input_values, params)
+					if not output_values then
+						return nil, ("failed to generate outputs: %s"):format(err)
+					end
 				end
-			end
-			for _, output_info in ipairs(info_outputs) do
-				local expect_value = output_values[output_info.name]
-				if type(expect_value) == "table" then
-					expect_value = expect_value.value
-				end
-				if expect_value then
-					if output_info.never_zero then
-						if expect_value == 0 then
-							return nil, ("output %s expected value %08X does not conform to +never_zero"):format(output_info.name, expect_value)
-						end
-					else
-						if bitx.band(expect_value, output_info.keepalive) ~= output_info.keepalive or
-						   bitx.band(expect_value, bitx.bor(output_info.keepalive, output_info.payload)) ~= expect_value then
-							return nil, ("output %s expected value %08X does not conform to keepalive/payload %08X/%08X"):format(output_info.name, expect_value, output_info.keepalive, output_info.payload)
+				for _, output_info in ipairs(info_outputs) do
+					local expect_value = output_values[output_info.name]
+					if type(expect_value) == "table" then
+						expect_value = expect_value.value
+					end
+					if expect_value then
+						if output_info.never_zero then
+							if expect_value == 0 then
+								return nil, ("output %s expected value %08X does not conform to +never_zero"):format(output_info.name, expect_value)
+							end
+						else
+							if bitx.band(expect_value, output_info.keepalive) ~= output_info.keepalive or
+							   bitx.band(expect_value, bitx.bor(output_info.keepalive, output_info.payload)) ~= expect_value then
+								return nil, ("output %s expected value %08X does not conform to keepalive/payload %08X/%08X"):format(output_info.name, expect_value, output_info.keepalive, output_info.payload)
+							end
 						end
 					end
 				end
+				result = { implicit = false, values = output_values }
 			end
-			return output_values
+			return result
 		end
 	end
 
@@ -228,6 +244,7 @@ local function modulef(info)
 	end
 
 	local function fuzz_outputs(input_values)
+		assert(not info.fuzz_outputs_implicit, "this module does not support explicit output fuzzing")
 		local ok, err = check_inputs(input_values)
 		if not ok then
 			return nil, err
