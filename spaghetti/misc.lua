@@ -186,6 +186,55 @@ local function hsv2rgb(h, s, v, a) -- [0, 1), [0, 1), [0, 1), [0, 255)
 	return r, g, b, a
 end
 
+local function las_func(lhs, rhs) -- locale-agnostic string sort function
+	-- * Doesn't matter what this is as long as it's canonical. Built-in
+	--   __lt on strings is not trustworthy because it's based on the
+	--   current locale, so it's not necessarily canonical.
+	for i = 1, math.max(#lhs, #rhs) do
+		local lb = string.byte(lhs, i) or -math.huge
+		local rb = string.byte(rhs, i) or -math.huge
+		if lb ~= rb then
+			return lb < rb
+		end
+	end
+	return false
+end
+
+local function ordered_pairs(tbl)
+	return user_wrap(function()
+		local keys = {}
+		for key in audited_pairs(tbl) do
+			if type(key) ~= "string" and type(key) ~= "number" then
+				user_error(("key %s is not a string or a number"):format(tostring(key)))
+			end
+			table.insert(keys, key)
+		end
+		table.sort(keys, function(lhs, rhs)
+			local lhst = type(lhs)
+			local rhst = type(rhs)
+			if lhst ~= rhst then
+				return las_func(lhst, rhst)
+			end
+			if lhs ~= rhs then
+				if lhst == "number" then
+					return lhs < rhs
+				end
+				if lhst == "string" then
+					return las_func(lhs, rhs)
+				end
+			end
+			return false
+		end)
+		local index = 0
+		return function()
+			if index < #keys then
+				index = index + 1
+				return keys[index], tbl[keys[index]]
+			end
+		end
+	end)
+end
+
 return {
 	user_wrap       = user_wrap,
 	user_error      = user_error,
@@ -198,4 +247,5 @@ return {
 	fnv1a32         = fnv1a32,
 	crappy_seed     = crappy_seed,
 	hsv2rgb         = hsv2rgb,
+	ordered_pairs   = ordered_pairs,
 }

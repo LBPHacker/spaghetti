@@ -13,9 +13,6 @@ local function run(params)
 	local design_params = params.design_params
 	local info = module_instance.design(design_params)
 
-	-- TODO: fix; the constant seed provided here makes the optimization stage deterministic
-	--       but that doesn't include the stages before it, which make the whole process
-	--       non-deterministic due to Lua hash table traversal order noise
 	local seed                = info.opt_params and info.opt_params.seed                or misc.crappy_seed()
 	local thread_count        = info.opt_params and info.opt_params.thread_count        or 4
 	local round_length        = info.opt_params and info.opt_params.round_length        or 1000

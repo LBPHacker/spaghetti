@@ -231,7 +231,7 @@ local function check_info(info)
 	local output_keys = ordered_map.make_ordered_map()
 	do
 		local keys = {}
-		for key in pairs(info.outputs) do
+		for key in misc.ordered_pairs(info.outputs) do
 			table.insert(keys, key)
 		end
 		table.sort(keys)

@@ -451,7 +451,7 @@ local function get_parts(storage_remap)
 	return {]]):format(seed[1], seed[2]))
 		for i = 1, #parts do
 			local words = {}
-			for key, value in audited_pairs(parts[i]) do
+			for key, value in misc.ordered_pairs(parts[i]) do
 				table.insert(words, ("%s = %s"):format(key, tostring(value)))
 			end
 			table.insert(arr, ("\t\t{ %s },"):format(table.concat(words, ", ")))
