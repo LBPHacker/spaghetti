@@ -9,9 +9,9 @@ local in_tpt = rawget(_G, "tpt") and true
 local audited_pairs = pairs
 
 local function run(params)
-	local module = params.module
+	local module_instance = params.module.instantiate(params.module_params)
 	local design_params = params.design_params
-	local info = module.design(design_params)
+	local info = module_instance.design(design_params)
 
 	-- TODO: fix; the constant seed provided here makes the optimization stage deterministic
 	--       but that doesn't include the stages before it, which make the whole process
@@ -224,7 +224,7 @@ local function run(params)
 					if in_tpt then
 						plot.plan(plot_x, plot_y, plan, info.extra_parts, {}, params.debug)
 					end
-					if fuzz and module.fuzz and in_tpt then
+					if fuzz and module_instance.fuzz and in_tpt then
 						runner_state = "fuzzing"
 					end
 				else
@@ -334,7 +334,7 @@ local function run(params)
 				done()
 			else
 				local failed_obj
-				fuzz_expect, failed_obj = module.fuzz(fuzz_expect, ctype_at, design_params)
+				fuzz_expect, failed_obj = module_instance.fuzz(fuzz_expect, ctype_at, design_params)
 				if not fuzz_expect then
 					fuzzing_failed = failed_obj or "?"
 					done()
