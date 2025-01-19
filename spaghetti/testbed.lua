@@ -258,11 +258,21 @@ local function modulef(info_raw)
 			return info.fuzz_outputs(input_values, params)
 		end
 
+		local function fuzz_outputs_implicit(input_values, output_values, params)
+			assert(info.fuzz_outputs_implicit, "this module does not support implicit output fuzzing")
+			local ok, err = check_inputs(input_values)
+			if not ok then
+				return nil, err
+			end
+			return info.fuzz_outputs_implicit(input_values, output_values, params)
+		end
+
 		return {
-			design       = design,
-			component    = component,
-			fuzz         = fuzz,
-			fuzz_outputs = fuzz_outputs,
+			design                = design,
+			component             = component,
+			fuzz                  = fuzz,
+			fuzz_outputs          = fuzz_outputs,
+			fuzz_outputs_implicit = fuzz_outputs_implicit,
 		}
 	end
 
