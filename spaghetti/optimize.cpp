@@ -1612,6 +1612,7 @@ void Optimizer::Dispatch(DispatchParameters dp)
 			{
 				shouldExchange = currentRound % dp.roundsPerExchange == 0;
 			}
+			currentRound += 1;
 			if (shouldExchange)
 			{
 				auto stateSample = PeekState();
