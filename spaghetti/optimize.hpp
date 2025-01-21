@@ -218,12 +218,12 @@ struct Plan
 
 	struct Top : public StepBase
 	{
-		static constexpr int32_t cost = 1;
+		static constexpr int32_t cost = 6;
 	};
 
 	struct Bottom : public StepBase
 	{
-		static constexpr int32_t cost = 4;
+		static constexpr int32_t cost = 6;
 	};
 
 	struct Load : public StepBase
