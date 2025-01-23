@@ -29,6 +29,14 @@ function storage_remap_mt:__tostring()
 	return ("setmetatable({ storage_slot = %s, offset = %s }, storage_remap_mt)"):format(tostring(self.storage_slot), tostring(self.offset))
 end
 
+local function xy_key(x, y)
+	return y * sim.XRES + x
+end
+
+local function xy_key_back(k)
+	return k % sim.XRES, math.floor(k / sim.XRES)
+end
+
 local particle_macros = {
 	[ "lcap" ] = {
 		params = { "stack_index", "life3_index" },
@@ -351,12 +359,6 @@ local function create_parts_(x, y, parts_in, storage_remap, debug)
 		ids[i] = id
 	end
 	table.sort(ids)
-	local function xy_key(x, y)
-		return y * sim.XRES + x
-	end
-	local function xy_key_back(k)
-		return k % sim.XRES, math.floor(k / sim.XRES)
-	end
 	do
 		local to_freeze = {}
 		for i = 1, #parts do
@@ -481,4 +483,6 @@ return {
 	serialize_plan   = serialize_plan,
 	merge_parts      = merge_parts,
 	storage_remap_mt = storage_remap_mt,
+	xy_key           = xy_key,
+	xy_key_back      = xy_key_back,
 }
