@@ -1,13 +1,12 @@
-local strict = require("spaghetti.strict")
-strict.wrap_env()
-
+local optimize    = _G.require("spaghetti.optimize")
+local strict      = require("spaghetti.strict")
 local check       = require("spaghetti.check")
 local user_node   = require("spaghetti.user_node")
 local graph       = require("spaghetti.graph")
 local misc        = require("spaghetti.misc")
 local id_store    = require("spaghetti.id_store")
-local optimize    = require("spaghetti.optimize")
 local bitx        = require("spaghetti.bitx")
+local plot        = require("spaghetti.plot")
 local ordered_map = require("spaghetti.ordered_map")
 
 local audited_pairs = pairs
@@ -468,8 +467,6 @@ local function preprocess_tree(output_keys, output_slots, inputs)
 	return outputs
 end
 
-local LSNS_LIFE_3 = 0x10000003
-
 local function construct_layout(stacks, storage_slots, max_work_slots, stack_max_size, outputs, on_progress, clobbers_keys, voids_keys, storage_slot_overhead_penalty, work_slot_overhead_penalty, original_inputs, input_initials)
 	local clobbers = {}
 	for index in audited_pairs(clobbers_keys) do
@@ -490,7 +487,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, stack_max
 	local seen_life_3 = false
 	hierarchy_up(output_keys, function(expr)
 		if expr.type_ == "constant" then
-			if constant_value(expr) == LSNS_LIFE_3 then
+			if constant_value(expr) == plot.LSNS_LIFE_3 then
 				seen_life_3 = true
 			end
 		elseif expr.type_ == "composite" then
@@ -521,7 +518,7 @@ local function construct_layout(stacks, storage_slots, max_work_slots, stack_max
 	end
 	ts_down(output_keys, prepare_expr)
 	if not seen_life_3 then
-		prepare_expr(user_node.make_constant_(LSNS_LIFE_3, 0))
+		prepare_expr(user_node.make_constant_(plot.LSNS_LIFE_3, 0))
 	end
 	local type_order = {
 		constant  = 1,
@@ -754,18 +751,15 @@ function debug_info_i:dump_work(handle, state)
 	end
 end
 
-local function build(info)
-	return misc.user_wrap(function()
-		info = check_info(info)
-		check_zeroness(info.output_keys)
-		check_connectivity(info.output_keys, info.inputs)
-		local outputs = preprocess_tree(info.output_keys, info.output_slots, info.inputs)
-		return construct_layout(info.stacks, info.storage_slots, info.work_slots, info.stack_max_size, outputs, info.on_progress, info.clobbers, info.voids, info.storage_slot_overhead_penalty, info.work_slot_overhead_penalty, info.inputs, info.input_initials)
-	end)
-end
+local build = misc.user_wrap(function(info)
+	info = check_info(info)
+	check_zeroness(info.output_keys)
+	check_connectivity(info.output_keys, info.inputs)
+	local outputs = preprocess_tree(info.output_keys, info.output_slots, info.inputs)
+	return construct_layout(info.stacks, info.storage_slots, info.work_slots, info.stack_max_size, outputs, info.on_progress, info.clobbers, info.voids, info.storage_slot_overhead_penalty, info.work_slot_overhead_penalty, info.inputs, info.input_initials)
+end)
 
 return strict.make_mt_one("spaghetti.build", {
 	build        = build,
 	hierarchy_up = hierarchy_up,
-	LSNS_LIFE_3  = LSNS_LIFE_3,
 })

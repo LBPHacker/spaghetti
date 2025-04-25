@@ -1,6 +1,4 @@
 local strict = require("spaghetti.strict")
-strict.wrap_env()
-
 local ordered_map_m, ordered_map_i = strict.make_mt("spaghetti.ordered_map.ordered_map")
 
 function ordered_map_i:add(thing, value)

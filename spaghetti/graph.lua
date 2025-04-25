@@ -1,6 +1,3 @@
-local strict = require("spaghetti.strict")
-strict.wrap_env()
-
 local misc        = require("spaghetti.misc")
 local ordered_map = require("spaghetti.ordered_map")
 

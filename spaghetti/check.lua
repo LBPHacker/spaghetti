@@ -1,7 +1,5 @@
 local strict = require("spaghetti.strict")
-strict.wrap_env()
-
-local misc = require("spaghetti.misc")
+local misc   = require("spaghetti.misc")
 
 local shift_aware_bits = 0x3FFFFFFF
 local keepalive_bits = 0x3FFFFFFF
@@ -25,10 +23,34 @@ local function tablef(name, value)
 	typef("table", name, value)
 end
 
+local function stringf(name, value)
+	typef("string", name, value)
+end
+
+local function one_of(name, value, options)
+	for i = 1, #options do
+		if options[i] == value then
+			return
+		end
+	end
+	local options_strs = {}
+	for i = 1, #options do
+		table.insert(options_strs, tostring(options[i]))
+	end
+	misc.user_error("%s is not one of %s", name, table.concat(options_strs, ", "))
+end
+
 local function integer(name, value)
 	number(name, value)
 	if math.floor(value) ~= value then
 		misc.user_error("%s is not an integer", name)
+	end
+end
+
+local function integer_range(name, value, low, high)
+	integer(name, value)
+	if value < low or value > high then
+		misc.user_error("%s is not in the range %i to %i inclusive", name, low, high)
 	end
 end
 
@@ -66,6 +88,9 @@ return strict.make_mt_one("spaghetti.check", {
 	func             = func,
 	table            = tablef,
 	integer          = integer,
+	integer_range    = integer_range,
+	string           = stringf,
+	one_of           = one_of,
 	shift_aware_bits = shift_aware_bits,
 	keepalive_bits   = keepalive_bits,
 	payload_bits     = payload_bits,

@@ -1,18 +1,14 @@
 local strict = require("spaghetti.strict")
-strict.wrap_env()
-
-local check = require("spaghetti.check")
-local misc  = require("spaghetti.misc")
-local bitx  = require("spaghetti.bitx")
+local check  = require("spaghetti.check")
+local misc   = require("spaghetti.misc")
+local bitx   = require("spaghetti.bitx")
 
 local user_node_m, user_node_i = strict.make_mt("spaghetti.user_node.user_node")
 
-function user_node_m:__concat(tbl)
-	return misc.user_wrap(function()
-		check.table("keepalive", tbl)
-		return self:assert_(tbl[1], tbl[2])
-	end)
-end
+user_node_m.__concat = misc.user_wrap(function(self, tbl)
+	check.table("keepalive", tbl)
+	return self:assert_(tbl[1], tbl[2])
+end)
 
 function user_node_m:__tostring()
 	return ("user_node[%s]"):format(tostring(self.label_))
@@ -148,11 +144,7 @@ function user_node_i:assert_(keepalive, payload)
 	return self
 end
 
-function user_node_i:assert(keepalive, payload)
-	return misc.user_wrap(function()
-		return self:assert_(keepalive, payload)
-	end)
-end
+user_node_i.assert = misc.user_wrap(user_node_i.assert_)
 
 function user_node_i:force(keepalive, payload)
 	check_keepalive_payload(keepalive, payload)
@@ -174,11 +166,7 @@ function user_node_i:feed_(fed_value)
 	return self
 end
 
-function user_node_i:feed(fed_value)
-	return misc.user_wrap(function()
-		return self:feed_(fed_value)
-	end)
-end
+user_node_i.feed = misc.user_wrap(user_node_i.feed_)
 
 local function make_node(typev)
 	return setmetatable({
@@ -216,11 +204,7 @@ local function make_constant_(keepalive, payload)
 	return node
 end
 
-local function make_constant(keepalive, payload)
-	return misc.user_wrap(function()
-		return make_constant_(keepalive, payload)
-	end)
-end
+local make_constant = misc.user_wrap(make_constant_)
 
 local function maybe_promote_number(thing)
 	if type(thing) == "number" then
@@ -239,11 +223,7 @@ local function make_input_(keepalive, payload)
 	return node
 end
 
-local function make_input(keepalive, payload)
-	return misc.user_wrap(function()
-		return make_input_(keepalive, payload)
-	end)
-end
+local make_input = misc.user_wrap(make_input_)
 
 local function vonoff_forward(keepalive, payload)
 	return keepalive, bitx.bxor(check.payload_bits, bitx.bor(keepalive, payload))
@@ -282,9 +262,7 @@ do
 			return node
 		end
 		user_node_i[name .. "_"] = func
-		user_node_i[name] = function(...)
-			return misc.user_wrap(func, ...)
-		end
+		user_node_i[name] = misc.user_wrap(func)
 		opnames[name] = info
 	end
 end

@@ -1,6 +1,3 @@
-local strict = require("spaghetti.strict")
-strict.wrap_env()
-
 local spaghetti   = require("spaghetti")
 local bitx        = require("spaghetti.bitx")
 local plot        = require("spaghetti.plot")

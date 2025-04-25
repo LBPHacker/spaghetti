@@ -1,14 +1,12 @@
-local strict = require("spaghetti.strict")
-strict.wrap_env()
-
-local plot     = require("spaghetti.plot")
-local optimize = require("spaghetti.optimize")
-local misc     = require("spaghetti.misc")
+local optimize   = _G.require("spaghetti.optimize")
+local plan       = require("spaghetti.plan")
+local misc       = require("spaghetti.misc")
+local modulepack = require("modulepack")
 
 local in_tpt = rawget(_G, "tpt") and true
 local audited_pairs = pairs
 
-local function run(params)
+local function run_internal(params)
 	local module_instance = params.module.instantiate(params.module_params)
 	local design_params = params.design_params
 	local info = module_instance.design(design_params)
@@ -137,10 +135,8 @@ local function run(params)
 		if in_tpt then
 			local func, r, g, b = gfx.drawRect, 128, 128, 128
 			if c then
-				local h = misc.fnv1a32(c .. "thecake") / 0x100000000
-				local s = 0.5
-				local v = 0.5 + misc.fnv1a32(c .. "isalie") / 0x200000000
-				func, r, g, b = gfx.fillRect, misc.hsv2rgb(h, s, v)
+				func = gfx.fillRect
+				r, g, b = misc.colour_hash(c)
 			elseif c == false then
 				func = drawCrossedRect
 			end
@@ -171,11 +167,11 @@ local function run(params)
 	end
 
 	local cancel
-	local plan
+	local optimizer_plan
 	local use_current
 	if in_tpt then
-		cancel = Button:new(text_x, text_y + 27, 80, 15, "Cancel")
-		use_current = Button:new(text_x + 90, text_y + 27, 80, 15, "Use current")
+		cancel = ui.button(text_x, text_y + 27, 80, 15, "Cancel")
+		use_current = ui.button(text_x + 90, text_y + 27, 80, 15, "Use current")
 	end
 	local runner_state = "optimizing"
 
@@ -197,10 +193,11 @@ local function run(params)
 
 	local aftersim
 	local tick
+	local defer_done = false
 	local function done()
 		if in_tpt then
 			cancel:text("OK")
-			tpt.set_pause(pause and 1 or 0)
+			sim.paused(pause)
 		end
 		runner_state = "done"
 	end
@@ -215,11 +212,11 @@ local function run(params)
 					interface.removeComponent(use_current)
 				end
 				local err
-				plan, err = final_state.state:plan()
-				if plan then
-					final_state.stacks_used = plan.stacks_used
+				optimizer_plan, err = final_state.state:plan()
+				if optimizer_plan then
+					final_state.stacks_used = optimizer_plan.stacks_used
 					if in_tpt then
-						plot.plan(plot_x, plot_y, plan, info.extra_parts, {}, params.debug)
+						plan.make_plan(plot_x, plot_y, optimizer_plan, info.extra_parts, {}, params.debug)
 					end
 					if fuzz and module_instance.fuzz and in_tpt then
 						runner_state = "fuzzing"
@@ -304,17 +301,6 @@ local function run(params)
 		print_func(text_x, text_y, table.concat(str))
 	end
 
-	local function xpcall_wrap(func)
-		return function()
-			xpcall(function()
-				func()
-			end, function(err)
-				print(err)
-				print(debug.traceback())
-			end)
-		end
-	end
-
 	local fuzz_expect
 	local function ctype_at(x, y, ...)
 		local id = sim.partID(x + plot_x, y + plot_y)
@@ -324,23 +310,27 @@ local function run(params)
 		end
 		return value
 	end
-	aftersim = xpcall_wrap(function()
+	aftersim = modulepack.xpcall_wrap(function()
 		if runner_state == "fuzzing" then
-			if not event.aftersim and tpt.setdrawcap() ~= 0 then
+			if not event.AFTERSIM and tpt.drawCap() ~= 0 then
 				fuzzing_failed = "event.aftersim is not available and draw cap isn't 0"
-				done()
+				defer_done = true
 			else
 				local failed_obj
 				fuzz_expect, failed_obj = module_instance.fuzz(fuzz_expect, ctype_at, design_params)
 				if not fuzz_expect then
 					fuzzing_failed = failed_obj or "?"
-					done()
+					defer_done = true
 				end
 				fuzzing_iterations = fuzzing_iterations + 1
 			end
 		end
 	end)
-	tick = xpcall_wrap(function()
+	tick = modulepack.xpcall_wrap(function()
+		if defer_done then
+			done()
+			defer_done = false
+		end
 		if runner_state == "optimizing" and optimizer:ready() then
 			stop_optimizing()
 		end
@@ -351,7 +341,7 @@ local function run(params)
 		if state then
 			draw_state(state)
 		end
-		if in_tpt and not event.aftersim then
+		if in_tpt and not event.AFTERSIM then
 			aftersim()
 		end
 	end)
@@ -360,8 +350,8 @@ local function run(params)
 		cancel:action(function()
 			stop_optimizing(true)
 			done()
-			event.unregister(event.tick, tick)
-			event.unregister(event.aftersim or event.tick, aftersim)
+			event.unregister(event.TICK, tick)
+			event.unregister(event.AFTERSIM or event.TICK, aftersim)
 			interface.removeComponent(use_current)
 			interface.removeComponent(cancel)
 		end)
@@ -370,8 +360,8 @@ local function run(params)
 		end)
 		interface.addComponent(use_current)
 		interface.addComponent(cancel)
-		event.register(event.tick, tick)
-		event.register(event.aftersim or event.tick, aftersim)
+		event.register(event.TICK, tick)
+		event.register(event.AFTERSIM or event.TICK, aftersim)
 	else
 		while true do
 			tick()
@@ -404,8 +394,8 @@ local function run(params)
 		elseif output_type == "work" then
 			info.design.debug_info:dump_work(output_handle, final_state.slot_states)
 		else
-			if plan then
-				assert(output_handle:write(plot.serialize_plan(plan, info.extra_parts, seed)))
+			if optimizer_plan then
+				assert(output_handle:write(plan.serialize_plan(optimizer_plan, info.extra_parts, seed)))
 			end
 		end
 		exit()
@@ -413,5 +403,5 @@ local function run(params)
 end
 
 return {
-	run = run,
+	run_internal = run_internal,
 }

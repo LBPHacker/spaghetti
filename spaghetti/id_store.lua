@@ -1,6 +1,4 @@
 local strict = require("spaghetti.strict")
-strict.wrap_env()
-
 local id_store_m, id_store_i = strict.make_mt("spaghetti.id_store.id_store")
 
 function id_store_i:get(thing)

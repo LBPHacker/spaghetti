@@ -8,7 +8,6 @@ shared_library(
 		dependency('lua5.1'),
 	],
 	override_options: [
-		'c_std=c99',
 		'cpp_std=c++17',
 		'cpp_rtti=false',
 		'warning_level=3',
@@ -17,24 +16,4 @@ shared_library(
 	install: true,
 	install_dir: install_dir,
 	include_directories: include_directories('.'),
-)
-
-install_data(
-	[
-		'bitx.lua',
-		'build.lua',
-		'check.lua',
-		'graph.lua',
-		'id_store.lua',
-		'init.lua',
-		'loader.lua',
-		'misc.lua',
-		'ordered_map.lua',
-		'plot.lua',
-		'runner.lua',
-		'strict.lua',
-		'testbed.lua',
-		'user_node.lua',
-	],
-	install_dir: install_dir,
 )

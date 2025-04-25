@@ -1,5 +1,7 @@
+local bitx = require("spaghetti.bitx")
+
 local forward_frame_name = "=[spaghetti_forward_frame]"
-local user_wrap = loadstring([[
+local user_wrap_chunk = loadstring([[
 	local function packn(...)
 		return { select("#", ...), ... }
 	end
@@ -7,6 +9,12 @@ local user_wrap = loadstring([[
 	local params_out = packn(params_in[2](unpack(params_in, 3, params_in[1] + 1)))
 	return unpack(params_out, 2, params_out[1] + 1)
 ]], forward_frame_name)
+
+local function user_wrap(func)
+	return function(...)
+		return user_wrap_chunk(func, ...)
+	end
+end
 
 local audited_pairs = pairs
 
@@ -186,6 +194,13 @@ local function hsv2rgb(h, s, v, a) -- [0, 1), [0, 1), [0, 1), [0, 255)
 	return r, g, b, a
 end
 
+local function colour_hash(c)
+	local h = fnv1a32(c .. "thecake") / 0x100000000
+	local s = 0.5
+	local v = 0.5 + fnv1a32(c .. "isalie") / 0x200000000
+	return hsv2rgb(h, s, v)
+end
+
 local function las_func(lhs, rhs) -- locale-agnostic string sort function
 	-- * Doesn't matter what this is as long as it's canonical. Built-in
 	--   __lt on strings is not trustworthy because it's based on the
@@ -200,39 +215,57 @@ local function las_func(lhs, rhs) -- locale-agnostic string sort function
 	return false
 end
 
-local function ordered_pairs(tbl)
-	return user_wrap(function()
-		local keys = {}
-		for key in audited_pairs(tbl) do
-			if type(key) ~= "string" and type(key) ~= "number" then
-				user_error(("key %s is not a string or a number"):format(tostring(key)))
-			end
-			table.insert(keys, key)
+local ordered_pairs = user_wrap(function(tbl)
+	local keys = {}
+	if type(tbl) ~= "table" then
+		user_error("tbl is not of type table")
+	end
+	for key in audited_pairs(tbl) do
+		if type(key) ~= "string" and type(key) ~= "number" then
+			user_error(("key %s is not a string or a number"):format(tostring(key)))
 		end
-		table.sort(keys, function(lhs, rhs)
-			local lhst = type(lhs)
-			local rhst = type(rhs)
-			if lhst ~= rhst then
-				return las_func(lhst, rhst)
+		table.insert(keys, key)
+	end
+	table.sort(keys, function(lhs, rhs)
+		local lhst = type(lhs)
+		local rhst = type(rhs)
+		if lhst ~= rhst then
+			return las_func(lhst, rhst)
+		end
+		if lhs ~= rhs then
+			if lhst == "number" then
+				return lhs < rhs
 			end
-			if lhs ~= rhs then
-				if lhst == "number" then
-					return lhs < rhs
-				end
-				if lhst == "string" then
-					return las_func(lhs, rhs)
-				end
-			end
-			return false
-		end)
-		local index = 0
-		return function()
-			if index < #keys then
-				index = index + 1
-				return keys[index], tbl[keys[index]]
+			if lhst == "string" then
+				return las_func(lhs, rhs)
 			end
 		end
+		return false
 	end)
+	local index = 0
+	return function()
+		if index < #keys then
+			index = index + 1
+			return keys[index], tbl[keys[index]]
+		end
+	end
+end)
+
+local function ilog2floor(n)
+	local l = 0
+	while n > 1 do
+		n = bitx.rshift(n, 1)
+		l = l + 1
+	end
+	return l
+end
+
+local function ilog2ceil(n)
+	local l = ilog2floor(n)
+	if bitx.lshift(1, l) < n then
+		l = l + 1
+	end
+	return l
 end
 
 return {
@@ -247,5 +280,8 @@ return {
 	fnv1a32         = fnv1a32,
 	crappy_seed     = crappy_seed,
 	hsv2rgb         = hsv2rgb,
+	colour_hash     = colour_hash,
 	ordered_pairs   = ordered_pairs,
+	ilog2floor      = ilog2floor,
+	ilog2ceil       = ilog2ceil,
 }
