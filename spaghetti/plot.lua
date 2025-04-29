@@ -702,11 +702,13 @@ local function common_structures(parts, debug_stacks)
 			local key = xy_key(x, y)
 			local q = parts_by_pos[key]
 			if q then
-				if q.type == pt.FILT  then
-					q.dcolour = 0xFF00FFFF
-				end
-				if q.type == pt.LDTC then
-					q.dcolour = 0xFF007F7F
+				if not q.dcolour then
+					if q.type == pt.FILT  then
+						q.dcolour = 0xFF00FFFF
+					end
+					if q.type == pt.LDTC then
+						q.dcolour = 0xFF007F7F
+					end
 				end
 			else
 				parts_by_pos[key] = part({ type = pt.DMND, x = x, y = y, dcolour = 0xFFFFFFFF })
