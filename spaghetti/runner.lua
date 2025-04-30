@@ -6,8 +6,9 @@ local modulepack = require("modulepack")
 local in_tpt = rawget(_G, "tpt") and true
 local audited_pairs = pairs
 
-local function run_internal(params)
-	local module_instance = params.module.instantiate(params.module_params)
+local function run_internal(params, params_name)
+	params_name = params_name or "params"
+	local module_instance = params.module.instantiate(params.module_params, params_name .. ".module_params")
 	local design_params = params.design_params
 	local info = module_instance.design(design_params)
 
@@ -403,5 +404,5 @@ local function run_internal(params)
 end
 
 return {
-	run_internal = run_internal,
+	run_internal = misc.user_wrap(run_internal),
 }

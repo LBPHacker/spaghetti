@@ -8,10 +8,10 @@ local in_tpt = rawget(_G, "tpt") and true
 local audited_pairs = pairs
 
 local function modulef(info_raw)
-	local function instantiate(params)
+	local function instantiate(params, params_name)
 		local info = info_raw
 		if type(info) == "function" then
-			info = info_raw(params)
+			info = info_raw(params, params_name)
 		end
 
 		local fuzz
