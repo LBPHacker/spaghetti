@@ -1,4 +1,5 @@
-local bitx = require("spaghetti.bitx")
+local bitx       = require("spaghetti.bitx")
+local modulepack = require("modulepack")
 
 local forward_frame_name = "=[spaghetti_forward_frame]"
 local user_wrap_chunk = loadstring([[
@@ -45,6 +46,7 @@ local function user_stack()
 		if info.source == forward_frame_name then
 			break
 		end
+		info.source = modulepack.demangle(info.source)
 		table.insert(stack, info)
 		level = level + 1
 	end
@@ -53,7 +55,7 @@ end
 
 local function user_frame_name()
 	local _, err = pcall(user_error, "@")
-	return err:match("^(.*): @$") or "[cannot determine user frame name]"
+	return modulepack.demangle(err:match("^(.*): @$") or "[cannot determine user frame name]")
 end
 
 local function parse_package_config()
