@@ -502,6 +502,11 @@ local function common_structures(parts, debug_stacks)
 				m.life = 1
 			end
 		end
+		if p.type == pt.STOR then
+			if not p.ctype then
+				m.ctype = pt.LOLZ
+			end
+		end
 		local q = mutate(p, m)
 		table.insert(parts, q)
 		if q.grvt_cover then
