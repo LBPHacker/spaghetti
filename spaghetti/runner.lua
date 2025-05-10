@@ -1,4 +1,3 @@
-local optimize   = _G.require("spaghetti.optimize")
 local plan       = require("spaghetti.plan")
 local misc       = require("spaghetti.misc")
 local modulepack = require("modulepack")
@@ -31,23 +30,6 @@ local function run_internal(params, params_name)
 	local vt100 = false
 	if params.vt100 ~= nil then
 		vt100 = params.vt100
-	end
-
-	local schedule
-	if info.opt_params and info.opt_params.schedule then
-		schedule = optimize.make_schedule({
-			durations    = info.opt_params.schedule.durations,
-			temperatures = info.opt_params.schedule.temperatures,
-		})
-	else
-		local temp_initial = info.opt_params and info.opt_params.temp_initial or 1
-		local temp_final   = info.opt_params and info.opt_params.temp_final   or 0.9995
-		local temp_loss    = info.opt_params and info.opt_params.temp_loss    or 1e-9
-		local duration = math.floor((temp_initial - temp_final) / temp_loss)
-		schedule = optimize.make_schedule({
-			durations    = { duration },
-			temperatures = { temp_initial, temp_final },
-		})
 	end
 
 	local output_handle = io.stdout
@@ -85,11 +67,30 @@ local function run_internal(params, params_name)
 		return
 	end
 
+	local schedule
+	local optimize = _G.require("spaghetti.optimize")
+	if info.opt_params and info.opt_params.schedule then
+		schedule = optimize.make_schedule({
+			durations    = info.opt_params.schedule.durations,
+			temperatures = info.opt_params.schedule.temperatures,
+		})
+	else
+		local temp_initial = info.opt_params and info.opt_params.temp_initial or 1
+		local temp_final   = info.opt_params and info.opt_params.temp_final   or 0.9995
+		local temp_loss    = info.opt_params and info.opt_params.temp_loss    or 1e-9
+		local duration = math.floor((temp_initial - temp_final) / temp_loss)
+		schedule = optimize.make_schedule({
+			durations    = { duration },
+			temperatures = { temp_initial, temp_final },
+		})
+	end
+
 	local optimizer = optimize.make_optimizer(seed[1], seed[2], thread_count)
 	if in_tpt then
 		sim.clearSim()
 	end
-	optimizer:state(info.design.design:initial(), schedule, 0)
+	local design = optimize.make_design(info.design.design_params)
+	optimizer:state(design:initial(), schedule, 0)
 	optimizer:dispatch(round_length, rounds_per_exchange)
 
 	if not in_tpt then

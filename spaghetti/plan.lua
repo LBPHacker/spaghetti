@@ -1,7 +1,6 @@
-local optimize = _G.require("spaghetti.optimize")
-local plot     = require("spaghetti.plot")
-local check    = require("spaghetti.check")
-local misc     = require("spaghetti.misc")
+local plot  = require("spaghetti.plot")
+local check = require("spaghetti.check")
+local misc  = require("spaghetti.misc")
 
 local function parse_plan(ctx, plan)
 	ctx.stacks = plan.stacks
@@ -28,6 +27,7 @@ local function parse_plan(ctx, plan)
 end
 
 local function partsify_plan(plan, extra)
+	local optimize = _G.require("spaghetti.optimize")
 	check.mt(optimize.plan_mt, "plan", plan)
 	if extra ~= nil then
 		check.table("extra", extra)

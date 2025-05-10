@@ -1,4 +1,3 @@
-local optimize    = _G.require("spaghetti.optimize")
 local strict      = require("spaghetti.strict")
 local check       = require("spaghetti.check")
 local user_node   = require("spaghetti.user_node")
@@ -625,10 +624,9 @@ local function construct_layout(stacks, storage_slots, max_work_slots, stack_max
 	for _, index in ipairs(voids) do
 		table.insert(design_params.voids, index - 1)
 	end
-	local design = optimize.make_design(design_params)
 	return {
-		design     = design,
-		debug_info = setmetatable({
+		design_params = design_params,
+		debug_info    = setmetatable({
 			output_keys          = output_keys,
 			source_index_to_expr = source_index_to_expr,
 		}, debug_info_m),
