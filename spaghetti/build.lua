@@ -10,6 +10,30 @@ local ordered_map = require("spaghetti.ordered_map")
 
 local audited_pairs = pairs
 
+local occ_problem_m, occ_problem_i = strict.make_mt("spaghetti.build.occ_problem")
+
+function occ_problem_i:interpret_solution(satisfiable)
+	local expr_values = {}
+	local config = {}
+	for _, index in ipairs(satisfiable) do
+		config[math.abs(index)] = index > 0
+	end
+	for expr, bits in audited_pairs(expr_bits) do
+		if expr.marked_occ_root_[domain] or expr == leaf then
+			local value = 0
+			for i = 0, 31 do
+				local config_value = config[bits[i]]
+				assert(config_value ~= nil)
+				if config_value then
+					value = bitx.bor(value, bitx.lshift(1, i))
+				end
+			end
+			expr_values[expr] = value
+		end
+	end
+	return expr_values
+end
+
 local debug_info_m, debug_info_i = strict.make_mt("spaghetti.build.debug_info")
 
 local function hierarchy_up(output_keys, visit)
@@ -453,6 +477,129 @@ local function flatten_selects(outputs)
 	end)
 end
 
+local function derive_fed_values(output_keys)
+	ts_down(output_keys, function(expr)
+		if expr.type_ == "composite" then
+			expr:derive_fed_value_()
+		end
+	end)
+end
+
+local function derive_occ_problems(raw_output_keys)
+	local problems = {}
+	hierarchy_up(raw_output_keys, function(leaf)
+		if leaf.marked_occ_leaf_ then
+			local domain = leaf.marked_occ_leaf_
+			local leaf_map = ordered_map.make_ordered_map()
+			leaf_map:add(leaf)
+			local relevant = {}
+			hierarchy_up(leaf_map, function(expr)
+				relevant[expr] = true
+				return true
+			end)
+			local closed = {}
+			local clauses = {}
+			local vars = {}
+			local function alloc_var(comment)
+				table.insert(vars, {
+					comment = comment,
+				})
+				return #vars
+			end
+			local expr_bits = {}
+			ts_down(raw_output_keys, function(expr)
+				if not relevant[expr] then
+					return
+				end
+				local expr_name = tostring(expr):gsub("[^A-Za-z0-9_]", "_")
+				expr_bits[expr] = {}
+				for i = 0, 31 do
+					expr_bits[expr][i] = alloc_var(("%s.bit-%i"):format(expr_name, i))
+				end
+				local spec = expr.marked_occ_root_[domain]
+				if spec then
+					closed[expr] = true
+					for i = 0, 31 do
+						local function visit(spec_name, spec)
+							local spec_var = alloc_var(spec_name)
+							local branch_vars = {}
+							for ix_branch, branch in ipairs(spec) do
+								local branch_name = ("%s[%i]"):format(spec_name, ix_branch)
+								local branch_var = alloc_var(branch_name)
+								local fixed_bits = {}
+								local mask = branch.mask or 0xFFFFFFFF
+								for i = 0, 31 do
+									if bitx.band(mask, bitx.lshift(1, i)) ~= 0 then
+										if bitx.band(branch.fixed, bitx.lshift(1, i)) ~= 0 then
+											table.insert(fixed_bits, expr_bits[expr][i])
+										else
+											table.insert(fixed_bits, -expr_bits[expr][i])
+										end
+									end
+								end
+								if branch.rest then
+									table.insert(fixed_bits, visit(branch_name .. ".rest", branch.rest))
+								end
+								user_node.and_clauses_(clauses, branch_var, fixed_bits)
+								table.insert(branch_vars, branch_var)
+							end
+							user_node.or_clauses_(clauses, spec_var, branch_vars)
+							return spec_var
+						end
+						table.insert(clauses, { visit(("%s.root-spec"):format(expr_name), spec) })
+					end
+				elseif expr.type_ == "constant" then
+					closed[expr] = true
+					local value = expr:constant_value_()
+					for i = 0, 31 do
+						local set = bitx.band(bitx.rshift(value, i), 1) ~= 0
+						if set then
+							table.insert(clauses, { expr_bits[expr][i] })
+						else
+							table.insert(clauses, { -expr_bits[expr][i] })
+						end
+					end
+				elseif expr.type_ == "composite" then
+					local all_parents_closed = true
+					local occ_params = {}
+					for index, name in ipairs(expr.info_.params) do
+						local parent = expr.params_[name]
+						if not closed[parent.node] then
+							all_parents_closed = false
+						end
+						table.insert(occ_params, expr_bits[parent.node])
+					end
+					if all_parents_closed then
+						closed[expr] = true
+						expr.info_.occ_clauses(expr_name, clauses, alloc_var, expr_bits[expr], unpack(occ_params))
+					end
+				end
+			end)
+			if not closed[leaf] then
+				misc.user_error("leaf %s is not closed over requested offline correctness check domain %s", tostring(leaf), tostring(domain))
+			end
+			local bad = {}
+			for i = 0, 31 do
+				local keepalive_set = bitx.band(bitx.rshift(leaf.keepalive_, i), 1) ~= 0
+				local payload_set   = bitx.band(bitx.rshift(leaf.payload_  , i), 1) ~= 0
+				if keepalive_set then
+					table.insert(bad, -expr_bits[leaf][i])
+				elseif not payload_set then
+					table.insert(bad, expr_bits[leaf][i])
+				end
+			end
+			table.insert(clauses, bad)
+			table.insert(problems, setmetatable({
+				nvars   = #vars,
+				clauses = clauses,
+				leaf    = leaf,
+			}, occ_problem_m))
+		end
+		return true
+	end)
+	return problems
+end
+
 local function preprocess_tree(output_keys, output_slots, inputs)
 	local outputs = {}
 	for key in output_keys:ipairs() do
@@ -461,9 +608,15 @@ local function preprocess_tree(output_keys, output_slots, inputs)
 			output_index = 1,
 		})
 	end
+	local raw_output_keys = ordered_map.make_ordered_map()
+	for _, param in ipairs(outputs) do
+		raw_output_keys:add(param.node)
+	end
+	derive_fed_values(raw_output_keys)
+	local occ_problems = derive_occ_problems(raw_output_keys)
 	outputs = fold_equivalent(outputs, output_slots, inputs)
 	outputs = flatten_selects(outputs)
-	return outputs
+	return outputs, occ_problems
 end
 
 local function construct_layout(stacks, storage_slots, max_work_slots, stack_max_size, outputs, on_progress, clobbers_keys, voids_keys, storage_slot_overhead_penalty, work_slot_overhead_penalty, original_inputs, input_initials)
@@ -511,7 +664,6 @@ local function construct_layout(stacks, storage_slots, max_work_slots, stack_max
 			table.insert(inputs, expr)
 		else
 			table.insert(composites, expr)
-			expr:derive_fed_value_()
 		end
 		return true
 	end
@@ -753,8 +905,10 @@ local build = misc.user_wrap(function(info)
 	info = check_info(info)
 	check_zeroness(info.output_keys)
 	check_connectivity(info.output_keys, info.inputs)
-	local outputs = preprocess_tree(info.output_keys, info.output_slots, info.inputs)
-	return construct_layout(info.stacks, info.storage_slots, info.work_slots, info.stack_max_size, outputs, info.on_progress, info.clobbers, info.voids, info.storage_slot_overhead_penalty, info.work_slot_overhead_penalty, info.inputs, info.input_initials)
+	local outputs, occ_problems = preprocess_tree(info.output_keys, info.output_slots, info.inputs)
+	local result = construct_layout(info.stacks, info.storage_slots, info.work_slots, info.stack_max_size, outputs, info.on_progress, info.clobbers, info.voids, info.storage_slot_overhead_penalty, info.work_slot_overhead_penalty, info.inputs, info.input_initials)
+	result.debug_info.occ_problems = occ_problems
+	return result
 end)
 
 return strict.make_mt_one("spaghetti.build", {

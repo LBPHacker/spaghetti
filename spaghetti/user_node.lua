@@ -3,6 +3,33 @@ local check  = require("spaghetti.check")
 local misc   = require("spaghetti.misc")
 local bitx   = require("spaghetti.bitx")
 
+local function default_label()
+	local frame_name = misc.user_frame_name()
+	frame_name = misc.call_site_name(frame_name) or frame_name
+	return ("@%s"):format(frame_name)
+end
+
+local occ_domain_m, occ_domain_i = strict.make_mt("spaghetti.user_node.occ_domain")
+
+function occ_domain_m:__tostring()
+	return ("occ_domain[%s]"):format(tostring(self.label_))
+end
+
+local function make_occ_domain(label)
+	local occ_domain = setmetatable({
+		label_ = default_label(),
+	}, occ_domain_m)
+	if label ~= nil then
+		occ_domain:label(label)
+	end
+	return occ_domain
+end
+
+function occ_domain_i:label(label)
+	self.label_ = label
+	return self
+end
+
 local user_node_m, user_node_i = strict.make_mt("spaghetti.user_node.user_node")
 
 user_node_m.__concat = misc.user_wrap(function(self, tbl)
@@ -21,6 +48,51 @@ end
 
 function user_node_i:zeroable()
 	self.marked_zeroable_ = true
+	return self
+end
+
+local function check_spec(spec_name, spec, parent_defines)
+	-- TODO: check pattern coverage somehow
+	check.table(spec_name, spec)
+	for ix_branch, branch in ipairs(spec) do
+		local branch_name = ("%s[%i]"):format(spec_name, ix_branch)
+		local payload = 0x00000000
+		local mask    = 0xFFFFFFFF
+		if branch.payload ~= nil then
+			payload = branch.payload
+		end
+		if branch.mask ~= nil then
+			mask = branch.mask
+		end
+		check.integer_range(branch_name .. ".fixed"  , branch.fixed, 0x00000000, 0xFFFFFFFF)
+		check.integer_range(branch_name .. ".mask"   , mask        , 0x00000000, 0xFFFFFFFF)
+		check.integer_range(branch_name .. ".payload", payload     , 0x00000000, 0xFFFFFFFF)
+		local redefines = bitx.band(parent_defines, mask)
+		if redefines ~= 0 then
+			misc.user_error("%s redefines fixed bits %08X", branch_name .. ".mask", redefines)
+		end
+		local efmask = bitx.bor(parent_defines, mask)
+		if bitx.band(payload, efmask) ~= 0 then
+			misc.user_error("%s and %s share bits", branch_name .. ".payload", branch_name .. ".mask")
+		end
+		local defines = bitx.bor(payload, efmask)
+		if defines ~= 0xFFFFFFFF then
+			if branch.rest == nil then
+				misc.user_error("%s only fixes bits %08X", branch_name, defines)
+			end
+			check_spec(branch_name .. ".rest", branch.rest, defines)
+		end
+	end
+end
+
+function user_node_i:occ_root(occ_domain, label, spec)
+	check.mt(occ_domain_m, "occ_domain", occ_domain)
+	if spec == "auto" then
+		spec = { { fixed = self.keepalive_, mask = bitx.bxor(0xFFFFFFFF, self.payload_), payload = self.payload_ } }
+	end
+	check_spec("spec", spec, 0x00000000)
+	self:label(label)
+	self.marked_occ_root_[occ_domain] = spec
 	return self
 end
 
@@ -153,6 +225,21 @@ function user_node_i:force(keepalive, payload)
 	return self
 end
 
+function user_node_i:relax_payload(payload)
+	check_keepalive_payload(self.keepalive_, payload)
+	self.payload_ = bitx.bor(self.payload_, payload)
+	check_keepalive_payload(self.keepalive_, self.payload_)
+	return self
+end
+
+function user_node_i:occ_force(occ_domain, label, keepalive, payload)
+	check.mt(occ_domain_m, "occ_domain", occ_domain)
+	self.marked_occ_leaf_ = occ_domain
+	self:label(label)
+	self:force(keepalive, payload)
+	return self
+end
+
 function user_node_i:feed_(fed_value)
 	if self.type_ ~= "input" then
 		misc.user_error("only inputs can be fed")
@@ -177,13 +264,9 @@ local function make_node(typev)
 		output_count_    = 1,
 		tag_             = false,
 		fed_value_       = false,
+		marked_occ_root_ = {},
+		marked_occ_leaf_ = false,
 	}, user_node_m)
-end
-
-local function default_label()
-	local frame_name = misc.user_frame_name()
-	frame_name = misc.call_site_name(frame_name) or frame_name
-	return ("@%s"):format(frame_name)
 end
 
 local function make_constant_(keepalive, payload)
@@ -267,6 +350,44 @@ do
 	end
 end
 
+local function or_clauses(clauses, output, inputs)
+	-- 1)  R == A | B | ...
+	-- 2)  R => (A | B | ...)
+	--     (A | B | ...) => R
+	-- 3)  !R | (A | B | ...)
+	--     !(A | B | ...) | R
+	-- 4)  !R | A | B | ...
+	--     (!A & !B & !...) | R
+	-- 5)  !R | A | B | ...
+	--     !A | R
+	--     !B | R
+	--     !... | R
+	local long = { -output }
+	for _, input in ipairs(inputs) do
+		table.insert(long, input)
+		table.insert(clauses, { output, -input })
+	end
+	table.insert(clauses, long)
+end
+local function and_clauses(clauses, output, inputs)
+	-- 1)  R == A & B & ...
+	-- 2)  (A & B & ...) => R
+	--     R => (A & B & ...)
+	-- 3)  !(A & B & ...) | R
+	--     !R | (A & B & ...)
+	-- 4)  (!A | !B | ...) | R
+	--     !R | (A & B & ...)
+	-- 5)  !A | !B | ... | R
+	--     !R | A
+	--     !R | B
+	--     !R | ...
+	local long = { output }
+	for _, input in ipairs(inputs) do
+		table.insert(long, -input)
+		table.insert(clauses, { -output, input })
+	end
+	table.insert(clauses, long)
+end
 add_op("band", {
 	params = { "lhs", "rhs" },
 	payload = function(lhs, rhs)
@@ -282,6 +403,11 @@ add_op("band", {
 	end,
 	exec = function(lhs, rhs)
 		return bitx.band(lhs, rhs)
+	end,
+	occ_clauses = function(expr_name, clauses, alloc_var, result, lhs, rhs)
+		for i = 0, 31 do
+			and_clauses(clauses, result[i], { lhs[i], rhs[i] })
+		end
 	end,
 	method = "filt_tmp",
 	filt_tmp = 1,
@@ -303,6 +429,11 @@ add_op("bor", {
 	exec = function(lhs, rhs)
 		return bitx.bor(lhs, rhs)
 	end,
+	occ_clauses = function(expr_name, clauses, alloc_var, result, lhs, rhs)
+		for i = 0, 31 do
+			or_clauses(clauses, result[i], { lhs[i], rhs[i] })
+		end
+	end,
 	method = "filt_tmp",
 	filt_tmp = 2,
 	commutative = true,
@@ -323,6 +454,11 @@ add_op("bsub", {
 	exec = function(lhs, rhs)
 		return bitx.band(lhs, bitx.bxor(rhs, check.payload_bits))
 	end,
+	occ_clauses = function(expr_name, clauses, alloc_var, result, lhs, rhs)
+		for i = 0, 31 do
+			and_clauses(clauses, result[i], { lhs[i], -rhs[i] })
+		end
+	end,
 	method = "filt_tmp",
 	filt_tmp = 3,
 	commutative = false,
@@ -342,6 +478,14 @@ add_op("bxor", {
 	end,
 	exec = function(lhs, rhs)
 		return bitx.bxor(lhs, rhs)
+	end,
+	occ_clauses = function(expr_name, clauses, alloc_var, result, lhs, rhs)
+		for i = 0, 31 do
+			table.insert(clauses, { -result[i], lhs[i], rhs[i] })
+			table.insert(clauses, { result[i], -lhs[i], rhs[i] })
+			table.insert(clauses, { result[i], lhs[i], -rhs[i] })
+			table.insert(clauses, { -result[i], -lhs[i], -rhs[i] })
+		end
 	end,
 	method = "filt_tmp",
 	filt_tmp = 7,
@@ -381,6 +525,27 @@ local function get_shifts(rhs)
 	end
 	return shifts
 end
+local function get_shiftby(clauses, expr_name, alloc_var, rhs)
+	local shiftby = {}
+	for i = 0, 29 do
+		shiftby[i] = alloc_var(("%s.shiftby-%i"):format(expr_name, i))
+		local inputs = { rhs[i] }
+		for j = 0, i - 1 do
+			table.insert(inputs, -rhs[j])
+		end
+		and_clauses(clauses, shiftby[i], inputs)
+	end
+	local zero = {}
+	for i = 0, 29 do
+		table.insert(zero, -rhs[i])
+	end
+	local shiftby_0_zero = alloc_var(("%s.shiftby-0-zero"):format(expr_name))
+	and_clauses(clauses, shiftby_0_zero, zero)
+	local shiftby_0_full = alloc_var(("%s.shiftby-0-full"):format(expr_name))
+	or_clauses(clauses, shiftby_0_full, { shiftby[0], shiftby_0_zero })
+	shiftby[0] = shiftby_0_full
+	return shiftby
+end
 local function do_shifts(lhs, rhs, func)
 	local keepalive, payload
 	for _, shift in ipairs(get_shifts(rhs)) do
@@ -414,6 +579,21 @@ add_op("lshift", {
 	exec = function(lhs, rhs)
 		return bitx.band(bitx.lshift(lhs, get_shift(rhs)), check.shift_aware_bits)
 	end,
+	occ_clauses = function(expr_name, clauses, alloc_var, result, lhs, rhs)
+		local shiftby = get_shiftby(clauses, expr_name, alloc_var, rhs)
+		for i = 0, 29 do
+			local diagonals = {}
+			for j = 0, i do
+				local diagonal = alloc_var(("%s.diagonal-%i-%i"):format(expr_name, i, j))
+				and_clauses(clauses, diagonal, { shiftby[j], lhs[i - j] })
+				table.insert(diagonals, diagonal)
+			end
+			or_clauses(clauses, result[i], diagonals)
+		end
+		table.insert(clauses, { -result[30] })
+		table.insert(clauses, { -result[31] })
+		return clauses
+	end,
 	method = "filt_tmp",
 	filt_tmp = 10,
 	commutative = false,
@@ -426,6 +606,21 @@ add_op("rshift", {
 	exec = function(lhs, rhs)
 		return bitx.band(bitx.rshift(lhs, get_shift(rhs)), check.shift_aware_bits)
 	end,
+	occ_clauses = function(expr_name, clauses, alloc_var, result, lhs, rhs)
+		local shiftby = get_shiftby(clauses, expr_name, alloc_var, rhs)
+		for i = 0, 29 do
+			local diagonals = {}
+			for j = 0, math.min(29, 31 - i) do
+				local diagonal = alloc_var(("%s.diagonal-%i-%i"):format(expr_name, i, j))
+				and_clauses(clauses, diagonal, { shiftby[j], lhs[i + j] })
+				table.insert(diagonals, diagonal)
+			end
+			or_clauses(clauses, result[i], diagonals)
+		end
+		table.insert(clauses, { -result[30] })
+		table.insert(clauses, { -result[31] })
+		return clauses
+	end,
 	method = "filt_tmp",
 	filt_tmp = 11,
 	commutative = false,
@@ -435,15 +630,54 @@ add_op("select", {
 	payload = function(cond, vnonzero, vzero)
 		return one_of(vnonzero, vzero)
 	end,
+	exec = function(cond, vnonzero, vzero)
+		if bitx.band(cond, 0x3FFFFFFF) == 0 then
+			return vzero
+		end
+		return vnonzero
+	end,
+	occ_clauses = function(expr_name, clauses, alloc_var, result, cond, vnonzero, vzero)
+		-- 1)  R = (S & A) | (!S & B)
+		-- 2)  R => ((S & A) | (!S & B))
+		--     ((S & A) | (!S & B)) => R
+		-- 3)  !R | ((S & A) | (!S & B))
+		--     !((S & A) | (!S & B)) | R
+		-- 4)  !R | (S & A) | (!S & B)
+		--     (!(S & A) & !(!S & B)) | R
+		-- 5)  !R | (S & A) | (!S & B)
+		--     ((!S | !A) & (S | !B)) | R
+		-- 6)  !R | S | B
+		--     !R | A | !S
+		--     !R | A | B
+		--     !S | !A | R
+		--     S | !B | R
+		local czero = {}
+		for i = 0, 29 do
+			table.insert(czero, -cond[i])
+		end
+		local select_0_czero = alloc_var(("%s.select-czero"):format(expr_name))
+		and_clauses(clauses, select_0_czero, czero)
+		for i = 0, 31 do
+			table.insert(clauses, { -result[i], select_0_czero, vnonzero[i] })
+			table.insert(clauses, { -result[i], vzero[i], -select_0_czero })
+			table.insert(clauses, { -result[i], vzero[i], vnonzero[i] })
+			table.insert(clauses, { -select_0_czero, -vzero[i], result[i] })
+			table.insert(clauses, { select_0_czero, -vnonzero[i], result[i] })
+		end
+	end,
 	method = "select",
 })
 
 return strict.make_mt_one("spaghetti.user_node", {
+	make_occ_domain       = make_occ_domain,
 	maybe_promote_number_ = maybe_promote_number,
 	make_constant         = make_constant,
 	make_constant_        = make_constant_,
 	make_input            = make_input,
 	make_input_           = make_input_,
 	mt_                   = user_node_m,
+	occ_domain_mt_        = occ_domain_m,
 	opnames_              = opnames,
+	or_clauses_           = or_clauses,
+	and_clauses_          = and_clauses,
 })

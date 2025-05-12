@@ -48,11 +48,12 @@ local rshiftk = misc.user_wrap(function(expr, amount)
 end)
 
 local spaghetti = strict.make_mt_one("spaghetti", {
-	constant = constant,
-	input    = input,
-	lshiftk  = lshiftk,
-	rshiftk  = rshiftk,
-	build    = build.build,
+	constant   = constant,
+	input      = input,
+	lshiftk    = lshiftk,
+	rshiftk    = rshiftk,
+	build      = build.build,
+	occ_domain = user_node.make_occ_domain,
 })
 for key, info in audited_pairs(user_node.opnames_) do
 	spaghetti[key] = misc.user_wrap(function(lhs, ...)
