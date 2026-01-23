@@ -432,7 +432,7 @@ local function run_internal(params, params_name)
 	tick = modulepack.xpcall_wrap(function()
 		while true do
 			if not tasks[current_task] then
-				if current_task > #tasks then
+				if current_task >= #tasks then
 					if unregister then
 						unregister()
 					end
@@ -458,11 +458,13 @@ local function run_internal(params, params_name)
 
 	if in_tpt then
 		local function cancel()
-			if tasks[current_task].cancel then
-				tasks[current_task].cancel()
-			end
-			if tasks[current_task].cleanup then
-				tasks[current_task].cleanup()
+			if tasks[current_task] then
+				if tasks[current_task].cancel then
+					tasks[current_task].cancel()
+				end
+				if tasks[current_task].cleanup then
+					tasks[current_task].cleanup()
+				end
 			end
 			unregister()
 		end
