@@ -409,7 +409,6 @@ namespace Spaghetti
 	private:
 		std::vector<Step> steps;
 
-		bool outputRemapFailed = false;
 		void MoveWorkSlot0GroupsBack();
 		void SortSteps();
 
@@ -417,12 +416,6 @@ namespace Spaghetti
 		struct ToPlanFailed : public std::runtime_error
 		{
 			using runtime_error::runtime_error;
-		};
-		struct OutputRemappingFailed : public ToPlanFailed
-		{
-			OutputRemappingFailed() : ToPlanFailed("output remapping failed")
-			{
-			}
 		};
 		struct StackBudgetExceeded : public ToPlanFailed
 		{
@@ -919,10 +912,6 @@ namespace Spaghetti
 
 	std::shared_ptr<Plan> EnergyWithPlan::ToPlan() const
 	{
-		if (outputRemapFailed)
-		{
-			throw OutputRemappingFailed();
-		}
 		if (design->storageSlots < storageSlotCount)
 		{
 			throw StorageSlotBudgetExceeded();
@@ -1475,7 +1464,7 @@ namespace Spaghetti
 		}
 		auto storageSlotCount = int32_t(slots.size());
 		auto storageSlotOverhead = std::max(0, storageSlotCount - design->storageSlots);
-		auto workSlotCount = 0;
+		auto workSlotCount = int32_t(outputRemaps.size());
 		for (int32_t layerIndex = 1; layerIndex < int32_t(layers.size()) - 1; ++layerIndex)
 		{
 			auto layerBegin = LayerBegins(layerIndex);
@@ -1492,11 +1481,7 @@ namespace Spaghetti
 		energy.design = design;
 		if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
 		{
-			if (int32_t(outputRemaps.size()) > design->workSlots)
-			{
-				energy.outputRemapFailed = true;
-			}
-			else if (outputRemaps.size() || outputWorkRemaps.size())
+			if (outputRemaps.size() || outputWorkRemaps.size())
 			{
 				std::vector<int32_t> outputWorkRemapsFrom(design->workSlots, -1);
 				for (int32_t outputWorkRemapIndex = 0; outputWorkRemapIndex < int(outputWorkRemaps.size()); ++outputWorkRemapIndex)
