@@ -5,7 +5,7 @@ option(
 	description: 'Lua module directory to install the module to',
 )
 option(
-	'occsat_cryptominisat5',
+	'occsat_Cryptominisat5',
 	type: 'boolean',
 	value: true,
 	description: 'Provide the cryptominisat5 solver in spaghetti.occsat',

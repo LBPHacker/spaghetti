@@ -1,0 +1,25 @@
+shared_library(
+	'optimize',
+	sources: [
+		'Design.cpp',
+		'DesignHandle.cpp',
+		'Energy.cpp',
+		'LuaInterface.cpp',
+		'Optimizer.cpp',
+		'OptimizerHandle.cpp',
+		'PlanValue.cpp',
+		'ScheduleHandle.cpp',
+		'State.cpp',
+		'StateDump.cpp',
+		'StateGetEnergy.cpp',
+		'StateHandle.cpp',
+	],
+	dependencies: [
+		lua51_dep,
+	],
+	override_options: project_options,
+	name_prefix: '',
+	install: true,
+	install_dir: install_dir,
+	include_directories: include_directories('.'),
+)

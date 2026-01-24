@@ -1,7 +1,7 @@
-#include "occsat.hpp"
+#include "Solver.hpp"
 #include <cryptominisat5/cryptominisat.h>
 
-namespace Spaghetti
+namespace Spaghetti::Occsat
 {
 	struct Cryptominisat5Solver : public Solver
 	{
@@ -76,7 +76,7 @@ namespace Spaghetti
 		}
 	};
 
-	std::shared_ptr<Solver> Solver::Make_cryptominisat5()
+	std::shared_ptr<Solver> Solver::MakeCryptominisat5()
 	{
 		return std::make_shared<Cryptominisat5Solver>();
 	}

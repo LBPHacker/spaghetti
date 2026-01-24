@@ -1,30 +1,15 @@
 #pragma once
+#include "Solvers.hpp"
+#include "Problem.hpp"
+#include "Solution.hpp"
 #include <atomic>
 #include <condition_variable>
-#include <cstdint>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <thread>
-#include <vector>
 
-#define OCSSAT_SOLVERS(X) \
-	@OCSSAT_SOLVERS@ \
-	// last line of the macro, don't remove
-
-namespace Spaghetti
+namespace Spaghetti::Occsat
 {
-	struct Problem
-	{
-		int32_t varCount = 0;
-		std::vector<std::vector<int32_t>> clauses;
-	};
-
-	struct Solution
-	{
-		std::optional<std::vector<int32_t>> satisfiable;
-	};
-
 	class Solver
 	{
 	protected:
@@ -68,8 +53,8 @@ namespace Spaghetti
 			return solution;
 		}
 
-#define OCSSAT_SOLVER_FACTORY(name) static std::shared_ptr<Solver> Make_ ## name();
-		OCSSAT_SOLVERS(OCSSAT_SOLVER_FACTORY)
-#undef OCSSAT_SOLVER_FACTORY
+#define OccsatSolverFactory(name) static std::shared_ptr<Solver> Make ## name();
+		OccsatSolvers(OccsatSolverFactory)
+#undef OccsatSolverFactory
 	};
 }
