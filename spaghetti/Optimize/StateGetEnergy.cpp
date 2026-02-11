@@ -10,6 +10,7 @@ namespace Spaghetti::Optimize
 	template<class EnergyType>
 	EnergyType State::GetEnergy() const
 	{
+		constexpr auto withPlan = std::is_same_v<EnergyType, EnergyWithPlan>;
 		EnergyType energy;
 		struct OutputRemap
 		{
@@ -62,7 +63,7 @@ namespace Spaghetti::Optimize
 			&storage,
 			&disallowConstantsInSlots,
 			&slots
-		](int32_t layerIndex, int32_t sourceIndex, StorageUsage usage, std::optional<int32_t> freeSlotIndex) {
+		](int32_t layerIndex, int32_t sourceIndex, StorageUsage usage, std::optional<int32_t> freeSlotIndex, int32_t uses) {
 			if (usage != usageVoid)
 			{
 				for (auto slotIndex : storage[sourceIndex].outputLinks)
@@ -123,14 +124,9 @@ namespace Spaghetti::Optimize
 				{
 					outputWorkRemaps.push_back({ *freeSlotIndex, slotIndex });
 				}
-				auto uses = design->sources[sourceIndex].uses;
-				if (usage == usageConstant)
-				{
-					uses = -1; // constants have infinite uses
-				}
 				storage[sourceIndex].usesLeft = uses;
 				storage[sourceIndex].slotIndex = *freeSlotIndex;
-				if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+				if constexpr (withPlan)
 				{
 					energy.steps.push_back(EnergyWithPlan::AllocStorage{ { layerIndex }, sourceIndex, *freeSlotIndex, uses });
 				}
@@ -149,7 +145,7 @@ namespace Spaghetti::Optimize
 					slots[slotIndex] = std::nullopt;
 				}
 			}
-			if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+			if constexpr (withPlan)
 			{
 				energy.steps.push_back(EnergyWithPlan::UseStorage{ { layerIndex }, slotIndex });
 			}
@@ -160,24 +156,24 @@ namespace Spaghetti::Optimize
 			auto nodeIndex = design->constantCount + inputIndex;
 			auto &node = design->nodes[nodeIndex];
 			auto sourceIndex = node.sources[0];
-			allocStorage(0, sourceIndex, usageNormal, design->inputStorageSlots[inputIndex]);
+			allocStorage(0, sourceIndex, usageNormal, design->inputStorageSlots[inputIndex], design->sources[sourceIndex].uses);
 		}
 		for (int32_t voidIndex = 0; voidIndex < int32_t(design->voidStorageSlots.size()); ++voidIndex)
 		{
-			allocStorage(0, -1, usageVoid, design->voidStorageSlots[voidIndex]);
+			allocStorage(0, -1, usageVoid, design->voidStorageSlots[voidIndex], -1 /* voids don't care about uses left */);
 		}
 		for (int32_t constantIndex = 0; constantIndex < design->constantCount; ++constantIndex)
 		{
 			auto nodeIndex = constantIndex;
 			auto &node = design->nodes[nodeIndex];
 			auto sourceIndex = node.sources[0];
-			auto storageSlotIndex = allocStorage(0, sourceIndex, usageConstant, std::nullopt);
-			if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+			auto storageSlotIndex = allocStorage(0, sourceIndex, usageConstant, std::nullopt, -1 /* constants have infinite uses */);
+			if constexpr (withPlan)
 			{
 				energy.steps.push_back(EnergyWithPlan::Constant{ { 0 }, storageSlotIndex, design->constantValues[constantIndex] });
 			}
 		}
-		if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+		if constexpr (withPlan)
 		{
 			energy.steps.push_back(EnergyWithPlan::Commit{ 0 });
 		}
@@ -188,6 +184,7 @@ namespace Spaghetti::Optimize
 				int32_t sourceIndex;
 				int32_t workSlotIndex;
 				std::optional<int32_t> cworkSlotIndex;
+				int32_t uses;
 			};
 			std::vector<StoreScheduleEntry> storeSchedule;
 			auto toSelectZeroLinkToSourceIndex = [this](const Link &link) {
@@ -195,16 +192,19 @@ namespace Spaghetti::Optimize
 				auto laneIndex = (link.neighbours[Link::directionDown].linkIndicesIndex - 1) / 2;
 				return std::pair<int32_t, int32_t>{ laneIndex, node.sources[laneIndex] };
 			};
-			auto doStore = [&storeSchedule](int32_t workSlotIndex, int32_t sourceIndex) {
+			auto doStore = [this, &storeSchedule](int32_t workSlotIndex, int32_t sourceIndex, int32_t uses) {
 				auto storeScheduleIndex = int32_t(storeSchedule.size());
-				storeSchedule.push_back({ sourceIndex, workSlotIndex, {} });
+				assert(uses);
+				assert(design->sources[sourceIndex].uses == uses ||
+				       design->sources[sourceIndex].uses == uses + 1);
+				storeSchedule.push_back({ sourceIndex, workSlotIndex, {}, uses });
 				return storeScheduleIndex;
 			};
 			std::vector<int32_t> selectStorageSlotSchedule;
-			auto doCstore = [&storeSchedule, &toSelectZeroLinkToSourceIndex, &selectStorageSlotSchedule](int32_t workSlotIndex, const Link &link) {
+			auto doCstore = [this, &storeSchedule, &toSelectZeroLinkToSourceIndex, &selectStorageSlotSchedule](int32_t workSlotIndex, const Link &link) {
 				auto storeScheduleIndex = int32_t(storeSchedule.size());
 				auto [ laneIndex, sourceIndex ] = toSelectZeroLinkToSourceIndex(link);
-				storeSchedule.push_back({ sourceIndex, -1, workSlotIndex });
+				storeSchedule.push_back({ sourceIndex, -1, workSlotIndex, design->sources[sourceIndex].uses });
 				selectStorageSlotSchedule[laneIndex] = storeScheduleIndex;
 			};
 			auto doCstoreStore = [&storeSchedule](int32_t workSlotIndex, int32_t storeScheduleIndex) {
@@ -221,7 +221,7 @@ namespace Spaghetti::Optimize
 				if (!tmpLoads[tmp].used)
 				{
 					energy.partCount += Plan::Mode::cost;
-					if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+					if constexpr (withPlan)
 					{
 						energy.steps.push_back(EnergyWithPlan::Mode{ { layerIndex }, workSlotIndex, tmp });
 					}
@@ -230,7 +230,7 @@ namespace Spaghetti::Optimize
 				if (tmpLoads[tmp].slotUsed[storageSlotIndex])
 				{
 					energy.partCount += Plan::Cload::cost;
-					if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+					if constexpr (withPlan)
 					{
 						energy.steps.push_back(EnergyWithPlan::Cload{ { layerIndex }, nodeIndex, tmp, workSlotIndex, storageSlotIndex });
 					}
@@ -239,7 +239,7 @@ namespace Spaghetti::Optimize
 				{
 					tmpLoads[tmp].slotUsed[storageSlotIndex] = 1;
 					energy.partCount += Plan::Load::cost;
-					if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+					if constexpr (withPlan)
 					{
 						energy.steps.push_back(EnergyWithPlan::Load{ { layerIndex }, nodeIndex, tmp, workSlotIndex, storageSlotIndex });
 					}
@@ -309,7 +309,7 @@ namespace Spaghetti::Optimize
 					for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
 					{
 						doLinkUpstream(nodeIndex, laneIndex * 2 + 1);
-					};
+					}
 				}
 			}
 			for (int32_t nodeIndicesIndex = layerBegin; nodeIndicesIndex < layerEnd; ++nodeIndicesIndex)
@@ -323,12 +323,12 @@ namespace Spaghetti::Optimize
 					for (int32_t stageIndex = 0; stageIndex < stageCount; ++stageIndex)
 					{
 						doLinkUpstream(nodeIndex, laneCount * 2 + stageIndex);
-					};
+					}
 					for (int32_t laneIndex = 0; laneIndex < laneCount; ++laneIndex)
 					{
 						doLinkUpstream(nodeIndex, laneIndex * 2);
 						doCstoreStore(workSlotsUsed - 1, selectStorageSlotSchedule[laneIndex]);
-					};
+					}
 				}
 				else
 				{
@@ -336,7 +336,8 @@ namespace Spaghetti::Optimize
 					{
 						doLinkUpstream(nodeIndex, linkIndicesIndex);
 					}
-					auto needsStore = false;
+					bool needsStore = false;
+					int32_t sameLayerLinks = 0;
 					for (auto linkIndex : node.linkIndices[Link::directionDown])
 					{
 						auto &link = design->links[linkIndex];
@@ -345,6 +346,10 @@ namespace Spaghetti::Optimize
 						{
 							needsStore = true;
 						}
+						if (nodeIndexToLayerIndex[linkedNodeIndex] == layerIndex && link.type == Link::toBinary)
+						{
+							sameLayerLinks += 1;
+						}
 						if (nodeIndexToLayerIndex[linkedNodeIndex] == layerIndex && link.type == Link::toSelectZero)
 						{
 							doCstore(workSlotsUsed - 1, link);
@@ -352,29 +357,29 @@ namespace Spaghetti::Optimize
 					}
 					if (needsStore)
 					{
-						doStore(workSlotsUsed - 1, node.sources[0]);
+						doStore(workSlotsUsed - 1, node.sources[0], design->sources[node.sources[0]].uses - sameLayerLinks);
 					}
 				}
 			}
 			for (auto &storeScheduleEntry : storeSchedule)
 			{
-				auto storageSlotIndex = allocStorage(layerIndex, storeScheduleEntry.sourceIndex, usageNormal, std::nullopt);
+				auto storageSlotIndex = allocStorage(layerIndex, storeScheduleEntry.sourceIndex, usageNormal, std::nullopt, storeScheduleEntry.uses);
 				energy.partCount += Plan::Store::cost;
-				if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+				if constexpr (withPlan)
 				{
 					energy.steps.push_back(EnergyWithPlan::Store{ { layerIndex }, storeScheduleEntry.workSlotIndex, storageSlotIndex });
 				}
 				if (storeScheduleEntry.cworkSlotIndex)
 				{
 					energy.partCount += Plan::Cstore::cost;
-					if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+					if constexpr (withPlan)
 					{
 						energy.steps.push_back(EnergyWithPlan::Cstore{ { layerIndex }, *storeScheduleEntry.cworkSlotIndex, storageSlotIndex });
 					}
 				}
 			}
 			energy.partCount += Plan::commitCost;
-			if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+			if constexpr (withPlan)
 			{
 				energy.steps.push_back(EnergyWithPlan::Commit{ layerIndex });
 			}
@@ -396,7 +401,7 @@ namespace Spaghetti::Optimize
 		energy.storageSlotCount = storageSlotCount;
 		energy.workSlotCount = workSlotCount;
 		energy.design = design;
-		if constexpr (std::is_same_v<EnergyType, EnergyWithPlan>)
+		if constexpr (withPlan)
 		{
 			if (outputRemaps.size() || outputWorkRemaps.size())
 			{

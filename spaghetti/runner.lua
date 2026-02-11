@@ -72,7 +72,7 @@ local function run_internal(params, params_name)
 		return
 	end
 
-	if output_type ~= "plot" then
+	if output_type ~= "plot" and output_type ~= "work" then
 		misc.user_error("unknown output type %s", output_type)
 	end
 	if in_tpt then

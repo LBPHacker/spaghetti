@@ -893,10 +893,18 @@ function debug_info_i:dump_graph(handle, with_constants)
 end
 
 function debug_info_i:dump_work(handle, state)
+	assert(handle:write(("%i %i\n"):format(#state.work_slot_states, state.work_slots)))
 	for i = 1, #state.work_slot_states do
 		local states = state.work_slot_states[i]
 		for j = 1, state.work_slots do
-			assert(handle:write(("%i %i %s\n"):format(i, j, tostring(states[j] and self.source_index_to_expr[states[j] + 1]))))
+			assert(handle:write(("%s %s\n"):format(tostring(states[j] and (states[j] - 1)), tostring(states[j] and self.source_index_to_expr[states[j]]))))
+		end
+	end
+	assert(handle:write(("%i %i\n"):format(#state.storage_slot_states, state.storage_slots)))
+	for i = 1, #state.storage_slot_states do
+		local states = state.storage_slot_states[i]
+		for j = 1, state.storage_slots do
+			assert(handle:write(("%s %s\n"):format(tostring(states[j] and (states[j] - 1)), tostring(states[j] and self.source_index_to_expr[states[j]]))))
 		end
 	end
 end
