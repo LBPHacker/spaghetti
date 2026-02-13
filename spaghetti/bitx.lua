@@ -12,6 +12,7 @@ wrap32("band")
 wrap32("bor")
 wrap32("bxor")
 wrap32("rshift")
+wrap32("arshift")
 wrap32("lshift")
 
 return bitx
