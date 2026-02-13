@@ -174,9 +174,9 @@ function user_node_i:derive_fed_value_()
 		if not parent.fed_value_ then
 			return
 		end
-		table.insert(params, parent.fed_value_)
+		table.insert(params, parent.fed_value_[1])
 	end
-	self.fed_value_ = self.info_.exec(unpack(params))
+	self.fed_value_ = { self.info_.exec(unpack(params)) }
 end
 
 function user_node_i:constant_value_()
@@ -249,7 +249,7 @@ function user_node_i:feed_(fed_value)
 	   bitx.band(fed_value, bitx.bor(self.keepalive_, self.payload_)) ~= fed_value then
 		return nil, ("fed value %08X does not conform to keepalive/payload %08X/%08X"):format(fed_value, self.keepalive_, self.payload_)
 	end
-	self.fed_value_ = fed_value
+	self.fed_value_ = { fed_value }
 	return self
 end
 
@@ -280,7 +280,7 @@ local function make_constant_(keepalive, payload)
 	node.payload_    = payload
 	node.terminal_   = true
 	node.label_      = default_label()
-	node.fed_value_  = node:constant_value_()
+	node.fed_value_  = { node:constant_value_() }
 	if bitx.band(bitx.bor(keepalive, payload), check.keepalive_bits) ~= 0 then
 		node:never_zero()
 	end

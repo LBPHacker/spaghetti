@@ -394,6 +394,7 @@ local function flatten_selects(outputs)
 		if expr.type_ == "composite" then
 			new_expr.params_ = {}
 			if expr.info_.method == "select" then
+				new_expr.fed_value_ = {}
 				local select_group = expr.select_group_ or { expr }
 				if not lifted_select_groups[select_group] then
 					local merged_info = {
@@ -447,6 +448,13 @@ local function flatten_selects(outputs)
 							table.insert(output_slots, slot)
 						end
 						new_expr.output_slots_[new_expr.output_count_] = output_slots
+						if new_expr.fed_value_ then
+							if lane_expr.fed_value_ then
+								table.insert(new_expr.fed_value_, lane_expr.fed_value_[1])
+							else
+								new_expr.fed_value_ = false
+							end
+						end
 						return new_expr.output_count_
 					end
 					lifted_select_groups[select_group] = {
@@ -872,7 +880,9 @@ function debug_info_i:dump_graph(handle, with_constants)
 		if with_constants or expr.type_ ~= "constant" then
 			local locations = deduplicate_locations(tostring(expr))
 			if expr.fed_value_ then
-				table.insert(locations, ("=%08X"):format(expr.fed_value_))
+				for _, value in ipairs(expr.fed_value_) do
+					table.insert(locations, ("=%08X"):format(value))
+				end
 			end
 			assert(handle:write(("%i [label=%s]\n"):format(node_ids:get(expr), to_dot_string(table.concat(locations, "\n")))))
 			assert(handle:write(("%i\n"):format(node_ids:get(expr))))
