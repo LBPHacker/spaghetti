@@ -3,6 +3,8 @@ local bitx        = require("spaghetti.bitx")
 local plot        = require("spaghetti.plot")
 local ordered_map = require("spaghetti.ordered_map")
 local build       = require("spaghetti.build")
+local user_node   = require("spaghetti.user_node")
+local check       = require("spaghetti.check")
 
 local in_tpt = rawget(_G, "tpt") and true
 local audited_pairs = pairs
@@ -71,7 +73,7 @@ local function modulef(info_raw)
 								return nil, ("output %s expected value unset"):format(output_info.name)
 							end
 							if expect_value ~= false and bitx.band(bitx.bxor(output_values[output_info.name], expect_value), expect_mask) ~= 0 then
-								return nil, ("output %s expected to have value %08X with mask %08X"):format(output_info.name, expect_value, expect_mask)
+								return nil, ("output %s expected to have value %08X with mask %08X"):format(output_info.name, expect_value, expect_mask), fuzz_expect.input_values
 							end
 						end
 					end
@@ -84,7 +86,12 @@ local function modulef(info_raw)
 						return nil, ("failed to generate inputs: %s"):format(err)
 					end
 				end
-				check_inputs(input_values)
+				do
+					local ok, err = check_inputs(input_values)
+					if not ok then
+						return nil, err
+					end
+				end
 				for _, input_info in ipairs(info_inputs) do
 					ctype_at(slot_pos(input_info.index), -probe_length - 3, input_values[input_info.name])
 				end
@@ -118,7 +125,7 @@ local function modulef(info_raw)
 							end
 						end
 					end
-					result = { implicit = false, values = output_values }
+					result = { implicit = false, values = output_values, input_values = input_values }
 				end
 				return result
 			end
@@ -158,6 +165,7 @@ local function modulef(info_raw)
 			add_tags(named_outputs, named_inputs)
 			for _, output_info in ipairs(info_outputs) do
 				local output = named_outputs[output_info.name]
+				check.mt(user_node.mt_, ("output %s"):format(output_info.name), output)
 				if not (output_info.keepalive == false and output_info.payload == false) then
 					local ok, err = pcall(function()
 						output:assert(output_info.keepalive, output_info.payload)
@@ -170,7 +178,7 @@ local function modulef(info_raw)
 			return named_outputs
 		end
 
-		local function design(params)
+		local function design(params, fed_value_overrides)
 			local probes = true
 			if params and params.probes ~= nil then
 				probes = params.probes
@@ -183,6 +191,9 @@ local function modulef(info_raw)
 			for input_index, input_info in ipairs(info_inputs) do
 				local expr = spaghetti.input(input_info.keepalive, input_info.payload)
 				named_inputs[input_info.name] = expr
+				if fed_value_overrides and fed_value_overrides[input_info.name] then
+					expr:feed(fed_value_overrides[input_info.name])
+				end
 				if input_info.never_zero then
 					expr:never_zero()
 				else

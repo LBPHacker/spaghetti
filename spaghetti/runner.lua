@@ -370,7 +370,9 @@ local function run_internal(params, params_name)
 
 		local fuzzing_iterations = 0
 		local fuzzing_failed = false
+		local fuzzing_input_values
 		local fuzz_expect
+		local explain_button, explain_button_added
 		table.insert(tasks, {
 			ready = function()
 				return false
@@ -378,7 +380,7 @@ local function run_internal(params, params_name)
 			aftersim = function()
 				if not fuzzing_failed then
 					local failed_obj
-					fuzz_expect, failed_obj = module_instance.fuzz(fuzz_expect, ctype_at, design_params)
+					fuzz_expect, failed_obj, fuzzing_input_values = module_instance.fuzz(fuzz_expect, ctype_at, design_params)
 					if not fuzz_expect then
 						fuzzing_failed = failed_obj or "?"
 					end
@@ -396,6 +398,26 @@ local function run_internal(params, params_name)
 					table.insert(str, ("\nFuzzing; %i iterations done"):format(fuzzing_iterations))
 				end
 				print_func(text_x, text_y, table.concat(str))
+				if in_tpt and fuzzing_input_values and not explain_button_added then
+					explain_button = ui.button(text_x + 90, text_y + 39, 80, 15, "Explain")
+					explain_button:action(function()
+						local dump_info = module_instance.design(design_params, fuzzing_input_values)
+						dump_info.design.debug_info:dump_graph(output_handle, false)
+						if open_handle then
+							assert(open_handle:close())
+							open_handle = nil
+						end
+						interface.removeComponent(explain_button)
+						explain_button = nil
+					end)
+					interface.addComponent(explain_button)
+					explain_button_added = true
+				end
+			end,
+			cleanup = function()
+				if in_tpt and explain_button then
+					interface.removeComponent(explain_button)
+				end
 			end,
 		})
 	end
