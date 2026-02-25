@@ -48,13 +48,22 @@ local function modulef(info_raw)
 			return true
 		end
 
+		local function get_probes(params)
+			local probes = true
+			if params and params.probes ~= nil then
+				probes = params.probes
+			end
+			return probes
+		end
+
 		if info.fuzz_inputs then
 			math.randomseed(os.time())
 			function fuzz(fuzz_expect, ctype_at, params)
+				local probes = get_probes(params)
 				if fuzz_expect then
 					local output_values = {}
 					for _, output_info in ipairs(info_outputs) do
-						output_values[output_info.name] = ctype_at(slot_pos(output_info.index), 2 + probe_length)
+						output_values[output_info.name] = ctype_at(slot_pos(output_info.index), probes == true and (2 + probe_length) or 0)
 					end
 					if fuzz_expect.implicit then
 						local ok, err = info.fuzz_outputs_implicit(fuzz_expect.values, output_values, params)
@@ -93,7 +102,7 @@ local function modulef(info_raw)
 					end
 				end
 				for _, input_info in ipairs(info_inputs) do
-					ctype_at(slot_pos(input_info.index), -probe_length - 3, input_values[input_info.name])
+					ctype_at(slot_pos(input_info.index), probes == true and (-probe_length - 3) or 0, input_values[input_info.name])
 				end
 				local result
 				if info.fuzz_outputs_implicit then
@@ -180,10 +189,7 @@ local function modulef(info_raw)
 		end
 
 		local function design(params, fed_value_overrides)
-			local probes = true
-			if params and params.probes ~= nil then
-				probes = params.probes
-			end
+			local probes = get_probes(params)
 			local inputs = {}
 			local input_initials = {}
 			local outputs = {}
@@ -200,7 +206,7 @@ local function modulef(info_raw)
 				else
 					assert(bitx.band(input_info.initial, expr.keepalive_) ~= 0)
 				end
-				if probes then
+				if probes == true then
 					-- input_info.index = input_index * 2 - 1
 					table.insert(extra_parts, { type = plot.pt.FILT, x = slot_pos(input_info.index), y = -probe_length - 3, ctype = input_info.initial })
 					table.insert(extra_parts, { type = plot.pt.LDTC, x = slot_pos(input_info.index), y = -probe_length - 1 })
@@ -213,12 +219,15 @@ local function modulef(info_raw)
 			end
 			local named_outputs = component(named_inputs, params)
 			for output_index, output_info in ipairs(info_outputs) do
-				if probes then
+				if probes == true then
 					-- output_info.index = output_index * 2 - 1
 					table.insert(extra_parts, { type = plot.pt.LDTC, x = slot_pos(output_info.index), y = 2 })
 					for i = 1, probe_length do
 						table.insert(extra_parts, { type = plot.pt.FILT, x = slot_pos(output_info.index), y = 2 + i })
 					end
+				elseif probes == "minimal" then
+					table.insert(extra_parts, { type = plot.pt.LDTC, x = slot_pos(output_info.index) - 2, y = 2 })
+					table.insert(extra_parts, { type = plot.pt.FILT, x = slot_pos(output_info.index) - 3, y = 3 })
 				end
 				outputs[output_info.index] = named_outputs[output_info.name]
 			end
