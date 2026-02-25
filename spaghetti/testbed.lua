@@ -154,6 +154,7 @@ local function modulef(info_raw)
 		local function component(named_inputs, params)
 			for _, input_info in ipairs(info_inputs) do
 				local input = named_inputs[input_info.name]
+				check.mt(user_node.mt_, ("input %s"):format(input_info.name), input)
 				local ok, err = pcall(function()
 					input:assert(input_info.keepalive, input_info.payload)
 				end)
