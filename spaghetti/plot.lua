@@ -74,7 +74,7 @@ local particle_macros = {
 					--          fi co ps
 					{ type = pt.CONV, x = stack_index * 2, tmp = pt.PSCN, ctype = pt.SPRK },
 					--          fi ld p4
-					{ type = pt.LDTC, x = stack_index * 2, tmp = 1, life = ctx.right13 + (ctx.stacks - stack_index) * 2 },
+					{ type = pt.LDTC, x = stack_index * 2, tmp = 1, life = setmetatable({ storage_slot = ctx.right13, offset = (ctx.stacks - stack_index) * 2 }, storage_remap_mt) },
 					--          fi ls p4
 					{ type = pt.LSNS, x = stack_index * 2, tmp = 3, tmp2 = 1, print_index = 1 },
 					--          fi    p3
@@ -181,7 +181,7 @@ local particle_macros = {
 				--          fi co it
 				{ type = pt.CONV, x = stack_index * 2, tmp = pt.INST, ctype = pt.SPRK },
 				--          fi ld i4
-				{ type = pt.LDTC, x = stack_index * 2, tmp = 1, life = ctx.right13 + (ctx.stacks - stack_index) * 2 },
+				{ type = pt.LDTC, x = stack_index * 2, tmp = 1, life = setmetatable({ storage_slot = ctx.right13, offset = (ctx.stacks - stack_index) * 2 }, storage_remap_mt) },
 				--          fi ls i4
 				{ type = pt.LSNS, x = stack_index * 2, tmp = 3, tmp2 = 1 },
 				--          fi ar i3
@@ -233,7 +233,7 @@ local particle_macros = {
 				--          fi co ps
 				{ type = pt.CONV, x = stack_index * 2, tmp = pt.PSCN, ctype = pt.SPRK },
 				--          fi ld p4
-				{ type = pt.LDTC, x = stack_index * 2, tmp = 1, life = ctx.right13 + (ctx.stacks - stack_index) * 2 },
+				{ type = pt.LDTC, x = stack_index * 2, tmp = 1, life = setmetatable({ storage_slot = ctx.right13, offset = (ctx.stacks - stack_index) * 2 }, storage_remap_mt) },
 				--          fi ls p4
 				{ type = pt.LSNS, x = stack_index * 2, tmp = 3, tmp2 = 1, print_index = 1 },
 				--          fi    p3
