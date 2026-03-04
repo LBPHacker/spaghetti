@@ -142,14 +142,24 @@ local function modulef(info_raw)
 
 		local function add_tags(named_outputs, named_inputs)
 			local boundary = {}
-			for _, expr in audited_pairs(named_inputs) do
+			local input_names = {}
+			local output_names = {}
+			for name, expr in audited_pairs(named_inputs) do
 				boundary[expr] = true
+				input_names[expr] = name
 			end
 			local initial = ordered_map.make_ordered_map()
-			for _, expr in audited_pairs(named_outputs) do
+			for name, expr in audited_pairs(named_outputs) do
 				initial:add(expr)
+				output_names[expr] = name
 			end
 			build.hierarchy_up(initial, function(expr)
+				if input_names[expr] and expr:has_default_label() then
+					expr:label(input_names[expr])
+				end
+				if output_names[expr] and expr:has_default_label() then
+					expr:label(output_names[expr])
+				end
 				if boundary[expr] then
 					return false
 				end

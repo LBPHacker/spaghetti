@@ -184,6 +184,10 @@ function user_node_i:constant_value_()
 	return bitx.bor(self.keepalive_, self.payload_)
 end
 
+function user_node_i:has_default_label()
+	return type(self.label_) == "string" and self.label_:find("^@") -- TODO: something smarter, e.g. metatable on default label
+end
+
 function user_node_i:label(label)
 	self.label_ = label
 	return self

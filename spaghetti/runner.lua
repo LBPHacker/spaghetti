@@ -43,11 +43,12 @@ local function run_internal(params, params_name)
 		open_handle = assert(io.open(params.output, "w"))
 		output_handle = open_handle
 	end
-	local function exit(code)
+	local exit_code
+	local function exit()
 		if open_handle then
 			assert(open_handle:close())
 		end
-		os.exit(code or 0)
+		os.exit(exit_code or 0)
 	end
 
 	local output_view = "none"
@@ -230,6 +231,7 @@ local function run_internal(params, params_name)
 								table.insert(config_strs, (" - %s: %08X"):format(tostring(expr), value))
 							end
 							failed = ("invalid configuration found for offline correctness check domain %s:\n%s\n"):format(domain, table.concat(config_strs, "\n"))
+							exit_code = 1
 						else
 							ready = true
 						end
@@ -308,6 +310,7 @@ local function run_internal(params, params_name)
 					ready = true
 				else
 					failed = err
+					exit_code = 1
 				end
 			end
 			optimizing = false
@@ -346,6 +349,7 @@ local function run_internal(params, params_name)
 				end
 				if failed then
 					table.insert(str, ("Done\nPlanning failed: %s"):format(failed))
+					exit_code = 1
 				else
 					table.insert(str, ("Optimizing; temperature: %f, about %i%% done"):format(state.temperature, math.floor(state.progress * 100)))
 				end
