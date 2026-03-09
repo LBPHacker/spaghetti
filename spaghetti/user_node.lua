@@ -280,11 +280,12 @@ local function make_constant_(keepalive, payload)
 	end
 	check_keepalive_payload(keepalive, payload)
 	local node = make_node("constant")
-	node.keepalive_  = keepalive
-	node.payload_    = payload
-	node.terminal_   = true
-	node.label_      = default_label()
-	node.fed_value_  = { node:constant_value_() }
+	node.keepalive_      = keepalive
+	node.payload_        = payload
+	node.terminal_       = true
+	node.label_          = default_label()
+	node.fed_value_      = { node:constant_value_() }
+	node.shift_constant_ = false
 	if bitx.band(bitx.bor(keepalive, payload), check.keepalive_bits) ~= 0 then
 		node:never_zero()
 	end
@@ -292,6 +293,15 @@ local function make_constant_(keepalive, payload)
 end
 
 local make_constant = misc.user_wrap(make_constant_)
+
+local function make_shift_constant_(amount)
+	check.integer_range("amount", amount, 1, 29)
+	local node = make_constant_(bitx.lshift(1, amount))
+	node.shift_constant_ = amount
+	return node
+end
+
+local make_shift_constant = misc.user_wrap(make_shift_constant_)
 
 local function maybe_promote_number(thing)
 	if type(thing) == "number" then
@@ -677,6 +687,8 @@ return strict.make_mt_one("spaghetti.user_node", {
 	maybe_promote_number_ = maybe_promote_number,
 	make_constant         = make_constant,
 	make_constant_        = make_constant_,
+	make_shift_constant   = make_shift_constant,
+	make_shift_constant_  = make_shift_constant_,
 	make_input            = make_input,
 	make_input_           = make_input_,
 	mt_                   = user_node_m,

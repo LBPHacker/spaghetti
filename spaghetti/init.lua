@@ -37,14 +37,14 @@ local lshiftk = misc.user_wrap(function(expr, amount)
 	expr = user_node.maybe_promote_number_(expr)
 	check.mt(user_node.mt_, "expr", expr)
 	check.kshift("amount", amount)
-	return expr:lshift(user_node.make_constant_(bitx.lshift(1, amount)))
+	return expr:lshift(user_node.make_shift_constant_(amount))
 end)
 
 local rshiftk = misc.user_wrap(function(expr, amount)
 	expr = user_node.maybe_promote_number_(expr)
 	check.mt(user_node.mt_, "expr", expr)
 	check.kshift("amount", amount)
-	return expr:rshift(user_node.make_constant_(bitx.lshift(1, amount)))
+	return expr:rshift(user_node.make_shift_constant_(amount))
 end)
 
 local spaghetti = strict.make_mt_one("spaghetti", {

@@ -314,7 +314,15 @@ local function fold_equivalent(outputs, output_slots, inputs)
 		table.insert(expr_to_output_slots[expr], slot)
 	end
 	local constants = {}
-	local function get_constant(value)
+	local function get_constant(value, shift_constant)
+		if shift_constant then
+			local mask = bitx.lshift(1, shift_constant + 1) - 1
+			for have_value, expr in audited_pairs(constants) do
+				if bitx.band(have_value, mask) == value then
+					return expr
+				end
+			end
+		end
 		if not constants[value] then
 			local constant = user_node.make_constant_(value)
 			constant.output_slots_ = { {} }
@@ -322,6 +330,17 @@ local function fold_equivalent(outputs, output_slots, inputs)
 			constants[value] = constant
 		end
 		return constants[value]
+	end
+	do
+		local output_keys = ordered_map.make_ordered_map()
+		for _, param in ipairs(outputs) do
+			output_keys:add(param.node)
+		end
+		ts_down(output_keys, function(expr)
+			if expr.type_ == "constant" and not expr.shift_constant_ then
+				get_constant(expr:constant_value_(), false)
+			end
+		end)
 	end
 	local node_ids = id_store.make_id_store()
 	local output_ids = id_store.make_id_store()
@@ -347,7 +366,7 @@ local function fold_equivalent(outputs, output_slots, inputs)
 		end
 		new_expr.output_slots_ = { {} }
 		if expr.type_ == "constant" then
-			new_expr = get_constant(expr:constant_value_())
+			new_expr = get_constant(expr:constant_value_(), expr.shift_constant_)
 		elseif expr.type_ == "composite" then
 			new_expr.params_ = {}
 			local fold_to_constant = true
