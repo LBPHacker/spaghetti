@@ -1,6 +1,7 @@
 local spaghetti   = require("spaghetti")
 local bitx        = require("spaghetti.bitx")
 local plot        = require("spaghetti.plot")
+local misc        = require("spaghetti.misc")
 local ordered_map = require("spaghetti.ordered_map")
 local build       = require("spaghetti.build")
 local user_node   = require("spaghetti.user_node")
@@ -16,6 +17,23 @@ local function modulef(info_raw)
 			info = info_raw(params, params_name)
 		end
 
+		local function check_input_value(name, value, keepalive, payload, never_zero)
+			if not value then
+				return nil, ("%s unset"):format(name)
+			end
+			if never_zero then
+				if value == 0 then
+					return nil, ("%s %08X does not conform to +never_zero"):format(name, value)
+				end
+			else
+				if bitx.band(value, keepalive) ~= keepalive or
+				   bitx.band(value, bitx.bor(keepalive, payload)) ~= value then
+					return nil, ("%s %08X does not conform to keepalive/payload %08X/%08X"):format(name, value, keepalive, payload)
+				end
+			end
+			return true
+		end
+
 		local fuzz
 		local probe_length = info.probe_length or 1
 		local function slot_pos(index)
@@ -25,24 +43,72 @@ local function modulef(info_raw)
 			return info.stacks * 2 + index
 		end
 		local stack_max_size = info.stack_max_size or 1500
-		local info_inputs = info.inputs or {}
-		local info_outputs = info.outputs or {}
+		local info_inputs = {}
+		do
+			local index_unique = {}
+			local name_unique = {}
+			if info.inputs then
+				check.table("info.inputs", info.inputs)
+				info_inputs = info.inputs
+				for ix_input, input_info in ipairs(info_inputs) do
+					local ix_input_name = ("info.inputs[%i]"):format(ix_input)
+					local name_name = ("%s.name"):format(ix_input_name)
+					check.string(name_name, input_info.name)
+					if name_unique[input_info.name] then
+						misc.user_error("%s is not unique", name_name)
+					end
+					name_unique[input_info.name] = true
+					local index_name = ("%s.index"):format(ix_input_name)
+					check.integer_range(index_name, input_info.index, 1, 1000)
+					if index_unique[input_info.index] then
+						misc.user_error("%s is not unique", index_name)
+					end
+					index_unique[input_info.index] = true
+					check.keepalive_payload(ix_input_name, input_info.keepalive, input_info.payload)
+					local ok, err = check_input_value(("%s.initial"):format(ix_input_name), input_info.initial, input_info.keepalive, input_info.payload, input_info.never_zero)
+					if not ok then
+						misc.user_error(err)
+					end
+				end
+			end
+		end
+		local info_outputs = {}
+		do
+			local index_unique = {}
+			local name_unique = {}
+			if info.outputs then
+				check.table("info.outputs", info.outputs)
+				info_outputs = info.outputs
+				for ix_output, output_info in ipairs(info_outputs) do
+					local ix_output_name = ("info.outputs[%i]"):format(ix_output)
+					local name_name = ("%s.name"):format(ix_output_name)
+					check.string(name_name, output_info.name)
+					if name_unique[output_info.name] then
+						misc.user_error("%s is not unique", name_name)
+					end
+					name_unique[output_info.name] = true
+					local index_name = ("%s.index"):format(ix_output_name)
+					check.integer_range(index_name, output_info.index, 1, 1000)
+					if index_unique[output_info.index] then
+						misc.user_error("%s is not unique", index_name)
+					end
+					index_unique[output_info.index] = true
+					check.keepalive_payload(ix_output_name, output_info.keepalive, output_info.payload)
+				end
+			end
+		end
 
 		local function check_inputs(input_values)
 			for _, input_info in ipairs(info_inputs) do
-				local set_value = input_values[input_info.name]
-				if not set_value then
-					return nil, ("input %s test value unset"):format(input_info.name)
-				end
-				if input_info.never_zero then
-					if set_value == 0 then
-						return nil, ("input %s test value %08X does not conform to +never_zero"):format(input_info.name, set_value)
-					end
-				else
-					if bitx.band(set_value, input_info.keepalive) ~= input_info.keepalive or
-					   bitx.band(set_value, bitx.bor(input_info.keepalive, input_info.payload)) ~= set_value then
-						return nil, ("input %s test value %08X does not conform to keepalive/payload %08X/%08X"):format(input_info.name, set_value, input_info.keepalive, input_info.payload)
-					end
+				local ok, err = check_input_value(
+					("input %s test value"):format(input_info.name),
+					input_values[input_info.name],
+					input_info.keepalive,
+					input_info.payload,
+					input_info.never_zero
+				)
+				if not ok then
+					return nil, err
 				end
 			end
 			return true

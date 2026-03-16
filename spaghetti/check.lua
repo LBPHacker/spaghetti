@@ -1,5 +1,6 @@
 local strict = require("spaghetti.strict")
 local misc   = require("spaghetti.misc")
+local bitx   = require("spaghetti.bitx")
 
 local shift_aware_bits = 0x3FFFFFFF
 local keepalive_bits = 0x3FFFFFFF
@@ -54,7 +55,7 @@ local function integer_range(name, value, low, high)
 	end
 end
 
-local function keepalive(name, value)
+local function keepalivef(name, value)
 	integer(name, value)
 	if value < 0 or value > keepalive_bits then
 		misc.user_error("%s is not the valid keepalive range", name)
@@ -68,10 +69,24 @@ local function kshift(name, value)
 	end
 end
 
-local function payload(name, value)
+local function payloadf(name, value)
 	integer(name, value)
 	if value < 0 or value > payload_bits then
 		misc.user_error("%s is not the valid payload range", name)
+	end
+end
+
+local function keepalive_payload(name, keepalive, payload)
+	local parent = name and (name .. ".") or ""
+	local keepalive_name = parent .. "keepalive"
+	local payload_name   = parent .. "payload"
+	keepalivef(keepalive_name, keepalive)
+	payloadf(payload_name, payload)
+	if bitx.band(keepalive, payload) ~= 0 then
+		misc.user_error("%s and %s share bits", keepalive_name, payload_name)
+	end
+	if bitx.bor(keepalive, payload) == 0 then
+		misc.user_error("%s and %s are empty", keepalive_name, payload_name)
 	end
 end
 
@@ -83,19 +98,20 @@ local function mt(expected_mt, name, value)
 end
 
 return strict.make_mt_one("spaghetti.check", {
-	typef            = typef,
-	number           = number,
-	func             = func,
-	table            = tablef,
-	integer          = integer,
-	integer_range    = integer_range,
-	string           = stringf,
-	one_of           = one_of,
-	shift_aware_bits = shift_aware_bits,
-	keepalive_bits   = keepalive_bits,
-	payload_bits     = payload_bits,
-	keepalive        = keepalive,
-	payload          = payload,
-	kshift           = kshift,
-	mt               = mt,
+	typef             = typef,
+	number            = number,
+	func              = func,
+	table             = tablef,
+	integer           = integer,
+	integer_range     = integer_range,
+	string            = stringf,
+	one_of            = one_of,
+	shift_aware_bits  = shift_aware_bits,
+	keepalive_bits    = keepalive_bits,
+	payload_bits      = payload_bits,
+	keepalive         = keepalivef,
+	payload           = payloadf,
+	keepalive_payload = keepalive_payload,
+	kshift            = kshift,
+	mt                = mt,
 })

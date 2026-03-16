@@ -198,19 +198,8 @@ function user_node_i:tag(tag)
 	return self
 end
 
-local function check_keepalive_payload(keepalive, payload)
-	check.keepalive("keepalive", keepalive)
-	check.payload("payload", payload)
-	if bitx.band(keepalive, payload) ~= 0 then
-		misc.user_error("keepalive and payload share bits")
-	end
-	if bitx.bor(keepalive, payload) == 0 then
-		misc.user_error("keepalive and payload are empty")
-	end
-end
-
 function user_node_i:assert_(keepalive, payload)
-	check_keepalive_payload(keepalive, payload)
+	check.keepalive_payload(nil, keepalive, payload)
 	if self.keepalive_ ~= keepalive then
 		misc.user_error("keepalive expected to be %08X, is actually %08X", keepalive, self.keepalive_)
 	end
@@ -223,16 +212,16 @@ end
 user_node_i.assert = misc.user_wrap(user_node_i.assert_)
 
 function user_node_i:force(keepalive, payload)
-	check_keepalive_payload(keepalive, payload)
+	check.keepalive_payload(nil, keepalive, payload)
 	self.keepalive_ = keepalive
 	self.payload_ = payload
 	return self
 end
 
 function user_node_i:relax_payload(payload)
-	check_keepalive_payload(self.keepalive_, payload)
+	check.keepalive_payload(nil, self.keepalive_, payload)
 	self.payload_ = bitx.bor(self.payload_, payload)
-	check_keepalive_payload(self.keepalive_, self.payload_)
+	check.keepalive_payload(nil, self.keepalive_, self.payload_)
 	return self
 end
 
@@ -278,7 +267,7 @@ local function make_constant_(keepalive, payload)
 		payload = bitx.band(keepalive, bitx.bxor(check.keepalive_bits, check.payload_bits))
 		keepalive = bitx.band(keepalive, check.keepalive_bits)
 	end
-	check_keepalive_payload(keepalive, payload)
+	check.keepalive_payload(nil, keepalive, payload)
 	local node = make_node("constant")
 	node.keepalive_      = keepalive
 	node.payload_        = payload
@@ -311,7 +300,7 @@ local function maybe_promote_number(thing)
 end
 
 local function make_input_(keepalive, payload)
-	check_keepalive_payload(keepalive, payload)
+	check.keepalive_payload(nil, keepalive, payload)
 	local node = make_node("input")
 	node.keepalive_  = keepalive
 	node.payload_    = payload
