@@ -7,5 +7,14 @@ project_options = [
 ]
 lua51_dep = dependency('lua5.1')
 
-install_dir = join_paths(get_option('install_dir'), 'spaghetti')
+install_dir = get_option('install_dir')
+module_install_dir = join_paths(install_dir, 'spaghetti')
 subdir('spaghetti')
+
+install_data(
+	[
+		'spaghetti.build.modulepack',
+		'spaghetti.plot.modulepack',
+	],
+	install_dir: install_dir,
+)

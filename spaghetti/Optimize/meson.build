@@ -20,6 +20,6 @@ shared_library(
 	override_options: project_options,
 	name_prefix: '',
 	install: true,
-	install_dir: install_dir,
+	install_dir: module_install_dir,
 	include_directories: include_directories('.'),
 )
