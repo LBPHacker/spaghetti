@@ -617,6 +617,7 @@ local function common_structures(parts, debug_stacks)
 		local order = 0
 		local dist = math.max(dx_magn, dy_magn)
 		local step = dist - 1
+		assert(step > 0)
 		while count > 0 do
 			local max_take = bitx.lshift(step, order)
 			local take = math.min(max_take, count)
@@ -693,14 +694,15 @@ local function common_structures(parts, debug_stacks)
 		return q
 	end
 
-	local function frame(x1, y1, x2, y2, bevel_begin, bevel_end)
-		bevel_begin = bevel_begin or -2
-		bevel_end = bevel_end or 0
+	local function frame(x1, y1, x2, y2, bevel_begin, bevel_end, default_dcolour)
+		bevel_begin     = bevel_begin or -2
+		bevel_end       = bevel_end or 0
+		default_dcolour = default_dcolour or 0xFF3F3F3F
 		local parts_by_pos = {}
 		for _, part in ipairs(parts) do
 			parts_by_pos[xy_key(part.x, part.y)] = part
 			if not part.dcolour then
-				part.dcolour = 0xFF3F3F3F
+				part.dcolour = default_dcolour
 			end
 		end
 		local function add_dmnd(x, y)
@@ -716,7 +718,7 @@ local function common_structures(parts, debug_stacks)
 					end
 				end
 			else
-				parts_by_pos[key] = part({ type = pt.DMND, x = x, y = y, dcolour = 0xFFFFFFFF })
+				parts_by_pos[key] = part({ type = pt.DMND, x = x, y = y, dcolour = 0xFFFFFFFF, unstack = true })
 			end
 		end
 		for x = x1 + 1, x2 - 1 do
