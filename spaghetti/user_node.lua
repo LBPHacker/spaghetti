@@ -441,7 +441,7 @@ add_op("bor", {
 	filt_tmp = 2,
 	commutative = true,
 })
-add_op("bsub", {
+add_op("bandnot", {
 	params = { "lhs", "rhs" },
 	payload = function(lhs, rhs)
 		--   0 1 X
@@ -670,6 +670,10 @@ add_op("select", {
 	end,
 	method = "select",
 })
+
+user_node_i["bsub_"] = user_node_i["bandnot_"]
+user_node_i["bsub"]  = user_node_i["bandnot"]
+opnames["bsub"]      = opnames["bandnot"]
 
 return strict.make_mt_one("spaghetti.user_node", {
 	make_occ_domain       = make_occ_domain,
